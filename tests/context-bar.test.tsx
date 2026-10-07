@@ -12,13 +12,18 @@ const NOON_UTC = Date.UTC(2026, 9, 7, 12, 0)
 
 let contextPercent = 42
 let lastReply: unknown = null
+let fiveHour: { percentUsed: number; resetsAt: string } = { percentUsed: 37, resetsAt: '2026-10-07T14:10:00Z' }
+const toasts: string[] = []
+const submitted: string[] = []
 
 const usage = {
   startedAt: NOON_UTC - (2 * 60 + 14) * 60_000,
-  rateLimits: [
-    { kind: 'five_hour', percentUsed: 37, resetsAt: '2026-10-07T14:10:00Z' },
-    { kind: 'seven_day', percentUsed: 12, resetsAt: '2026-10-11T15:00:00Z' },
-  ],
+  get rateLimits() {
+    return [
+      { kind: 'five_hour', ...fiveHour },
+      { kind: 'seven_day', percentUsed: 12, resetsAt: '2026-10-11T15:00:00Z' },
+    ]
+  },
   cost: { usd: 0.1 },
   context: {
     window: 200_000,
@@ -61,6 +66,9 @@ type On = Parameters<Body>[1]
 function world(on: On, options: { agents?: unknown[]; store?: Record<string, unknown> } = {}) {
   contextPercent = 42
   lastReply = null
+  fiveHour = { percentUsed: 37, resetsAt: '2026-10-07T14:10:00Z' }
+  toasts.length = 0
+  submitted.length = 0
   const clock = mock.clock(on, { now: NOON_UTC })
   mock.store(on, options.store ?? {})
   on('session.usage', () => ({ value: usage }) as never)
@@ -77,7 +85,14 @@ function world(on: On, options: { agents?: unknown[]; store?: Record<string, unk
   on('command.register', () => ({ value: { command: 'context-bar' } }) as never)
   on('turn.start', (_, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }) as never)
-  on('prompt.submit', (_, e) => ({ text: e.text }) as never)
+  on('prompt.submit', (_, e) => {
+    submitted.push(e.text)
+    return { text: e.text } as never
+  })
+  on('ui.toast', (_, e) => {
+    toasts.push(e.text)
+    return { value: undefined } as never
+  })
   on('http.fetch', (_, e) => {
     if (e.url.includes('geocoding')) {
       return reply({ results: [{ name: 'Ludhiana', latitude: 30.9, longitude: 75.85 }] })
@@ -498,5 +513,49 @@ test('the plugin setting picks the dog when nothing was chosen yet', { options: 
   await started($, clock)
   const ui = await mountBand($)
   expect((await funTextsOf(ui)).some(t => t.includes('U( '))).toBe(true)
+  await ui.unmount()
+})
+
+test('Limit Coach warns before the 5-hour window fills, then offers Continue once it resets', async ($, on) => {
+  const clock = world(on)
+
+  // 60% at noon, 82% half an hour later: at that pace it fills in about 25 minutes
+  fiveHour = { percentUsed: 60, resetsAt: new Date(NOON_UTC + 3 * 3_600_000).toISOString() }
+  await started($, clock)
+  await clock.advance(30 * 60_000)
+  fiveHour = { ...fiveHour, percentUsed: 82 }
+  await started($, clock)
+
+  let ui = await mountBand($)
+  expect(await ui.find({ type: 'Text', text: /^ ⚠ full in ~\d+m$/ })).toBeDefined()
+  expect(toasts.some(t => /5-hour limit at 82%, full in ~\d+m at this pace/.test(t))).toBe(true)
+  expect(await ui.find({ type: 'Button', key: 'continue' })).toBeUndefined()
+  await ui.unmount()
+
+  // it fills up, resetting ten minutes from now
+  fiveHour = { percentUsed: 100, resetsAt: new Date(clock.now() + 10 * 60_000).toISOString() }
+  await started($, clock)
+  await clock.advance(11 * 60_000)
+  expect(toasts.some(t => /has reset/.test(t))).toBe(true)
+
+  ui = await mountBand($)
+  expect(await ui.find({ type: 'Button', key: 'continue' })).toBeDefined()
+  await ui.press({ key: 'continue' })
+  await clock.settle()
+  expect(submitted.some(t => /limit has reset\. Please continue/.test(t))).toBe(true)
+  expect(await ui.find({ type: 'Button', key: 'continue' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('Limit Coach stays quiet when the window will reset before it fills', async ($, on) => {
+  const clock = world(on)
+  fiveHour = { percentUsed: 30, resetsAt: new Date(NOON_UTC + 20 * 60_000).toISOString() }
+  await started($, clock)
+  await clock.advance(10 * 60_000)
+  fiveHour = { ...fiveHour, percentUsed: 34 }
+  await started($, clock)
+  const ui = await mountBand($)
+  expect(await ui.find({ type: 'Text', text: /⚠/ })).toBeUndefined()
+  expect(toasts).toEqual([])
   await ui.unmount()
 })

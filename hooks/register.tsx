@@ -6,6 +6,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentChip, ContextSnap, FunProps, Limit, Phase, Spend, Weather } from '../types'
+import { NO_COACH, coachStep, coachTick, etaText, minutesToFull } from './coach'
 import {
   allocate,
   colorFor,
@@ -56,6 +57,7 @@ const agents = atom({ plugin: 'context-bar', key: 'agents' } as const, [])
 const quote = atom({ plugin: 'context-bar', key: 'quote' } as const, '')
 const spend = atom({ plugin: 'context-bar', key: 'spend' } as const, NO_SPEND)
 const pet = atom({ plugin: 'context-bar', key: 'pet' } as const, 'cat')
+const coach = atom({ plugin: 'context-bar', key: 'coach' } as const, NO_COACH)
 
 // Layout, in terminal columns.
 const COLUMN_GAP = 3
@@ -156,6 +158,7 @@ async function refresh($: EngineInterface) {
       ...(await readModelInfo($)),
     }
     await update($, snap, () => next)
+    await coachReading($, next.fiveHour)
   } catch {
     // usage is unavailable before a session is bound; the card stays as it was
   }
@@ -181,6 +184,48 @@ async function addSpend(
     }))
   } catch {
     // the tally is cosmetic
+  }
+}
+
+/** Limit Coach takes a new reading of the 5-hour window, and warns when one is due. */
+async function coachReading($: EngineInterface, lim: Limit | null) {
+  try {
+    const now = await $.clock.now()
+    let toast: string | null = null
+    await update($, coach, c => {
+      const step = coachStep(c, now, lim)
+      toast = step.toast
+      return step.next
+    })
+    if (toast) $.ui.toast(toast, { timeoutMs: 8000 })
+  } catch {
+    // the coach is advice; never let it break a refresh
+  }
+}
+
+/** On the clock: notices when a full 5-hour window has reset. */
+async function coachClock($: EngineInterface) {
+  try {
+    const now = await $.clock.now()
+    const c = await read($, coach)
+    const ready = coachTick(c, now)
+    if (!ready) return
+    await update($, coach, () => ready)
+    $.ui.toast('Your 5-hour limit has reset. Press Continue on the card to pick up where you left off.', {
+      timeoutMs: 10_000,
+    })
+  } catch {
+    // try again on the next tick
+  }
+}
+
+/** The Continue button: clears the reset note and asks Claude to carry on. */
+async function continueWork($: EngineInterface) {
+  try {
+    await update($, coach, c => ({ ...c, isReset: false }))
+    await $.prompt.submit({ text: 'My 5-hour limit has reset. Please continue where you left off.' } as never)
+  } catch {
+    // a missed press is fine; typing continue still works
   }
 }
 
@@ -290,6 +335,7 @@ export const register: Register = (on, options) => {
     })
     $.clock.every(MINUTE_TICK_MS, () => {
       void refreshAgents($)
+      void coachClock($)
       $.ui.invalidate('ui.render')
     })
     $.clock.every(WEATHER_REFRESH_MS, () => void fetchWeather($, city, unit))
@@ -300,6 +346,7 @@ export const register: Register = (on, options) => {
 
   on('prompt.submit', ($, e, next) => {
     void rollQuote($)
+    void update($, coach, c => (c.isReset ? { ...c, isReset: false } : c)).catch(() => {})
     void refresh($)
     return next(e)
   })
@@ -386,7 +433,7 @@ export const register: Register = (on, options) => {
       return next(e)
     }
 
-    const { Box, Client, Text } = $.ui.resolve(e)
+    const { Box, Button, Client, Text } = $.ui.resolve(e)
     const bg = { backgroundColor: BG } as const
     const t = (color: string, text: string, extra: { bold?: boolean; italic?: boolean } = {}) => (
       <Text {...bg} color={color} {...extra}>
@@ -494,7 +541,11 @@ export const register: Register = (on, options) => {
     const spinFrame = Math.floor(now / SPINNER_MS)
     const shownAgents = live.slice(0, 4)
 
-    const limit = (name: string, lim: Limit | null) => (
+    // Limit Coach: the pace the 5-hour window fills at, when it would run out first
+    const coached = await read($, coach)
+    const eta = minutesToFull(coached.samples, now, s.fiveHour)
+
+    const limit = (name: string, lim: Limit | null, warning: string | null = null) => (
       <Text {...bg}>
         {label(name)}
         {lim === null ? (
@@ -504,10 +555,12 @@ export const register: Register = (on, options) => {
             {meter(lim.percent / 100, percentColor(lim.percent), meterCells)}
             {t(percentColor(lim.percent), ` ${Math.round(lim.percent)}%`, { bold: true })}
             {t(MUTED, resetsIn(now, lim.resetsAt) ? ` ↻ ${resetsIn(now, lim.resetsAt)}` : '')}
+            {warning ? t(PEACH, ` ⚠ ${warning}`, { bold: true }) : null}
           </Text>
         )}
       </Text>
     )
+    const fiveWarning = eta === null ? null : etaText(eta)
 
     const modelLine = (
       <Text {...bg} wrap="truncate-end">
@@ -561,19 +614,31 @@ export const register: Register = (on, options) => {
           </Text>
           {dataWidth >= MIN_DATA_FOR_ONE_LIMIT_ROW ? (
             <Text {...bg} wrap="truncate-end">
-              {limit('5H', s.fiveHour)}
+              {limit('5H', s.fiveHour, fiveWarning)}
               {t(MUTED, '     ')}
               {limit('WEEK', s.sevenDay)}
             </Text>
           ) : (
             [
               <Text key="five" {...bg} wrap="truncate-end">
-                {limit('5H', s.fiveHour)}
+                {limit('5H', s.fiveHour, fiveWarning)}
               </Text>,
               <Text key="week" {...bg} wrap="truncate-end">
                 {limit('WEEK', s.sevenDay)}
               </Text>,
             ]
+          )}
+          {coached.isReset && (
+            <Box {...bg} flexDirection="row" alignItems="center">
+              {label('5H')}
+              {t(GREEN, 'reset!  ', { bold: true })}
+              <Button
+                key="continue"
+                variant="primary"
+                label="Continue where we left off"
+                onPress={() => void continueWork($)}
+              />
+            </Box>
           )}
           <Text {...bg} wrap="truncate-end">
             {label('CACHE')}

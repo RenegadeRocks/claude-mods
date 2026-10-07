@@ -6,6 +6,8 @@ A Claude Code mod that puts a card above your prompt.
 
 **On the right:** how full the context window is and what fills it, your 5-hour and weekly limits, how much the prompt cache saved you, what the session would cost at API prices, any subagents at work, and a fresh quote with every prompt.
 
+**Limit Coach:** watches how fast your 5-hour window fills. If you'll run out before it resets, the 5H row says when ("⚠ full in ~25m") and a note at 80% and 95% suggests a lower `/effort` or a lighter model. When a full window resets, a **Continue** button on the card picks the work back up.
+
 ## Install
 
 In Claude Code, type:

@@ -44,6 +44,18 @@ export type Spend = {
   usdSaved: number
 }
 
+/** Limit Coach's memory of the 5-hour window. */
+export type Coach = {
+  /** [clock ms, percent] readings from the last hour, oldest first. */
+  samples: [number, number][]
+  /** The highest warning given in this window: 0, 80 or 95. */
+  warned: number
+  /** When a full window resets (its resetsAt), while waiting for it; else null. */
+  waitingFor: string | null
+  /** True once a full window has reset, until Continue or the next prompt. */
+  isReset: boolean
+}
+
 /** A live subagent, under the fun name it was given. */
 export type AgentChip = { id: string; name: string; type: string }
 
@@ -81,6 +93,7 @@ declare module 'claude-code' {
       quote: string
       spend: Spend
       pet: 'cat' | 'dog'
+      coach: Coach
     }
   }
 }
