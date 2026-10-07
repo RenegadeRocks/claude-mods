@@ -1,0 +1,12 @@
+{
+  "name": "renegaderocks",
+  "owner": { "name": "RenegadeRocks" },
+  "description": "RenegadeRocks' Claude Code mods.",
+  "plugins": [
+    {
+      "name": "context-bar",
+      "source": "./",
+      "description": "A card above the Claude Code prompt: context, limits, cache and API cost, model and effort, a quote, and an animated pet that grows with your context."
+    }
+  ]
+}

@@ -1,0 +1,37 @@
+{
+  "name": "context-bar",
+  "version": "0.1.0",
+  "description": "A card above the prompt: context, limits, cache and API cost, model and effort, a quote, and an animated pet (cat or dog) that grows with your context.",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "city": {
+      "type": "string",
+      "title": "Weather city",
+      "description": "City for the weather. Leave empty to use your approximate location from your IP address.",
+      "default": "Ludhiana"
+    },
+    "unit": {
+      "type": "string",
+      "title": "Temperature unit",
+      "description": "celsius or fahrenheit",
+      "default": "celsius",
+      "options": [
+        "celsius",
+        "fahrenheit"
+      ]
+    },
+    "pet": {
+      "type": "string",
+      "title": "Pet",
+      "description": "Which pet lives in the bar. /context-bar pet dog or /context-bar pet cat swaps it any time.",
+      "default": "cat",
+      "options": [
+        "cat",
+        "dog"
+      ]
+    }
+  },
+  "author": {
+    "name": "RenegadeRocks"
+  }
+}
