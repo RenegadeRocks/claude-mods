@@ -45,8 +45,14 @@ async function remember($: EngineInterface, change: Project) {
 }
 
 /** Sets the prompt bar to this project's colour, choosing and saving one for a new project. */
+/** Whether `/project-colors off` is in force; read from the store each time, so it holds across sessions. */
+async function isOff($: EngineInterface): Promise<boolean> {
+  return (await $.store.get('isOn')) === false
+}
+
 async function applyColor($: EngineInterface) {
   try {
+    if (await isOff($)) return
     const { key, folder, projects } = await thisProject($)
     const saved = await $.store.get('colors')
     const colors = Array.isArray(saved) && saved.length > 0 ? (saved as string[]) : DEFAULT_COLORS
@@ -73,6 +79,7 @@ async function applyColor($: EngineInterface) {
 /** Names a fresh session after its project: the name you gave it before, else the folder's. */
 async function applyName($: EngineInterface) {
   try {
+    if (await isOff($)) return
     const { key, folder, projects } = await thisProject($)
     await $.command.run({ command: 'rename', args: projects[key]?.name ?? folder } as never)
   } catch {
@@ -84,7 +91,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'project-colors',
-      description: "Show this project's colour and name, or forget them: /project-colors [reset]",
+      description: "Show this project's colour and name, forget them, or switch the mod off and on: /project-colors [reset|off|on]",
     })
     const result = await next(e)
     void applyColor($)
@@ -116,15 +123,29 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'project-colors' }, async ($, e) => {
+    const arg = e.args.trim().toLowerCase()
+    if (arg === 'off' || arg === 'on' || arg === 'toggle') {
+      const isOn = arg === 'on' ? true : arg === 'off' ? false : await isOff($)
+      await $.store.set('isOn', isOn)
+      if (isOn) {
+        void applyColor($)
+        return { text: "Project colours on. This project's colour is back." }
+      }
+      // a command cannot run another from inside itself: reset the colour just after it ends
+      $.clock.after(0, () => void $.command.run({ command: 'color', args: 'default' } as never).catch(() => {}))
+      return { text: 'Project colours off, in every session until /project-colors on. Your saved colours and names are kept.' }
+    }
+
     const { key, folder, projects } = await thisProject($)
-    if (e.args.trim().toLowerCase() === 'reset') {
+    if (arg === 'reset') {
       const { [key]: _forgotten, ...rest } = projects
       await $.store.set('projects', rest)
       return { text: `Forgot ${folder}'s colour and name. The next session picks fresh ones.` }
     }
     const p = projects[key] ?? {}
+    const state = (await isOff($)) ? ' Project colours are off; /project-colors on brings them back.' : ''
     return {
-      text: `${folder}: colour ${p.color ?? 'not set yet'}, name ${p.name ?? `${folder} (from the folder)`}. Use /color or /rename to change them; this project remembers.`,
+      text: `${folder}: colour ${p.color ?? 'not set yet'}, name ${p.name ?? `${folder} (from the folder)`}. Use /color or /rename to change them; this project remembers.${state}`,
     }
   })
 }

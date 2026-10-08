@@ -89,3 +89,27 @@ test('/project-colors shows the project and reset forgets it', async ($, on) => 
   expect((await typed($, 'project-colors', 'reset')).text).toMatch(/^Forgot BlenderAnimation/)
   expect((await typed($, 'project-colors', '')).text).toMatch(/colour not set yet/)
 })
+
+test('/project-colors off stops it in every session until on, and resets the colour', async ($, on) => {
+  const clock = world(on)
+  await $.session.start(start)
+  await clock.settle()
+
+  ran.length = 0
+  expect((await typed($, 'project-colors', 'off')).text).toMatch(/^Project colours off/)
+  await clock.settle()
+  expect(ran).toContain('/color default')
+
+  // a new session stays plain: no colour, no name
+  ran.length = 0
+  await $.session.start(start)
+  await $.classic.SessionStart({ source: 'startup' } as never)
+  await clock.settle()
+  expect(ran.filter(r => r.startsWith('/color ') || r.startsWith('/rename '))).toEqual([])
+  expect((await typed($, 'project-colors', '')).text).toMatch(/Project colours are off/)
+
+  ran.length = 0
+  expect((await typed($, 'project-colors', 'on')).text).toMatch(/^Project colours on/)
+  await clock.settle()
+  expect(ran.some(r => /^\/color (red|blue|green|yellow|purple|orange|pink|cyan)$/.test(r))).toBe(true)
+})

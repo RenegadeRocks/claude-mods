@@ -12,5 +12,7 @@ Each project folder keeps its own prompt-bar colour and a session name, so you c
 |---|---|
 | `/project-colors` | Shows this project's colour and name |
 | `/project-colors reset` | Forgets them; the next session picks fresh ones |
+| `/project-colors off` | Stops colouring and naming, in every session until you turn it back on; the bar goes back to the default colour |
+| `/project-colors on` | Turns it back on, with your saved colours and names |
 
 Each session starts with a short "Session color set to: …" line. That's this mod at work.
