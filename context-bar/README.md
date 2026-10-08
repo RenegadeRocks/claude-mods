@@ -46,6 +46,7 @@ Press `y` to add the marketplace, then pick the **user** scope so it shows in ev
 | `/context-bar pet cat` | Rocky becomes a cat (remembered) |
 | `/context-bar sounds off` | The pet stops chiming (remembered); `sounds on` brings it back |
 | `/context-bar nudges off` | No more eye and water nudges (remembered); `nudges on` brings them back |
+| `/context-bar glow bright` | The desk's clock and lamp glow at full strength (remembered); `glow soft` tones them down |
 
 ## Settings
 

@@ -22,6 +22,9 @@ export const RED = '#f38ba8'
 
 export const SIGNATURE_STOPS = [PINK, MAUVE, BLUE]
 
+// the API $ bar's parts, light to dark gold: in, out, cache read, cache write, other
+export const GOLDS = ['#fbe7b5', '#f0c674', '#d19a4e', '#a87642', '#6c6450'] as const
+
 /** Green, then peach, then red as a share fills up. */
 export function percentColor(percent: number): string {
   if (percent >= 85) return RED

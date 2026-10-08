@@ -41,6 +41,7 @@ import {
   BG,
   BLUE,
   BORDER,
+  GOLDS,
   GREEN,
   MAUVE,
   MUTED,
@@ -101,7 +102,8 @@ const MIN_DATA_FOR_ONE_LIMIT_ROW = 56
 const MIN_CELLS = 12
 const MAX_CELLS = 160
 // every meter's label takes this many columns, so the meters line up
-const LABEL = 6
+// the label column, wide enough for CONTEXT, so every row's value starts in line
+const LABEL = 8
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 
 // Timing.
@@ -873,6 +875,16 @@ export const register: Register = (on, options) => {
       return { text: isOn ? "Rocky's sounds are on." : "Rocky is quiet now, until /context-bar sounds on." }
     }
 
+    // the desk's clock and lamp glow: soft to try, bright to go back
+    if (words[0] === 'glow') {
+      const level = words[1] === 'bright' ? 'bright' : 'soft'
+      await $.store.set('glow', level)
+      $.ui.invalidate('ui.render')
+      return {
+        text: level === 'bright' ? 'The desk glows bright again.' : 'The desk glows softer now. /context-bar glow bright brings the full glow back.',
+      }
+    }
+
     if (words[0] === 'nudges') {
       const isOn = words[1] !== 'off'
       await $.store.set('nudges', isOn)
@@ -892,7 +904,7 @@ export const register: Register = (on, options) => {
     // a word it doesn't know explains the command rather than flipping the bar
     if (arg !== '' && arg !== 'on' && arg !== 'off' && arg !== 'toggle') {
       return {
-        text: 'Usage: /context-bar [on|off|toggle] · pet dog|cat · sounds on|off · nudges on|off. On its own it switches the bar off or on.',
+        text: 'Usage: /context-bar [on|off|toggle] · pet dog|cat · sounds on|off · nudges on|off · glow soft|bright. On its own it switches the bar off or on.',
       }
     }
     const was = await read($, isOn)
@@ -956,6 +968,7 @@ export const register: Register = (on, options) => {
       goal: await read($, goal),
       pomodoro: await read($, pomodoro),
       ambient: await read($, ambient),
+      glow: (await $.store.get('glow')) === 'bright' ? 'bright' : 'soft',
       now,
     }
     const [gpuNow, party, wellnessNow, chosenEffort, newest] = await Promise.all([
@@ -997,7 +1010,7 @@ export const register: Register = (on, options) => {
     const used = s.rows.filter(r => r.kind === 'used' && r.tokens > 0)
     const bar = [...used, ...s.rows.filter(r => r.kind === 'buffer'), ...s.rows.filter(r => r.kind === 'free')]
     // one row when there is room: the label and share, the bar, the token counts
-    const contextHead = `CONTEXT  ${s.percent}%  `
+    const contextHead = `${'CONTEXT'.padEnd(LABEL)}${s.percent}%  `
     const contextTail = `  ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`
     // beside the desk the bar ends where the desk begins, its totals right after it
     const contextWidth = showDesk ? rowsWidth : dataWidth
@@ -1020,11 +1033,11 @@ export const register: Register = (on, options) => {
     const total = Math.max(s.costUsd ?? 0, itemized)
     const other = total - itemized
     const costParts: [string, number, string][] = [
-      ['in', sp.usdInput, BLUE],
-      ['out', sp.usdOutput, GREEN],
-      ['read', sp.usdRead, TEAL],
-      ['write', sp.usdWrite, PEACH],
-      ...(other >= 0.01 ? [['other', other, MUTED] as [string, number, string]] : []),
+      ['in', sp.usdInput, GOLDS[0]],
+      ['out', sp.usdOutput, GOLDS[1]],
+      ['read', sp.usdRead, GOLDS[2]],
+      ['write', sp.usdWrite, GOLDS[3]],
+      ...(other >= 0.01 ? [['other', other, GOLDS[4]] as [string, number, string]] : []),
     ]
     const costCells = shareCells(
       costParts.map(([, usd]) => usd),
@@ -1110,7 +1123,7 @@ export const register: Register = (on, options) => {
             <Box {...bg} flexDirection="column" flexGrow={1}>
               {isOneContextRow ? (
                 <Text {...bg} wrap="truncate-end">
-                  {t(MUTED, 'CONTEXT  ')}
+                  {label('CONTEXT')}
                   {t(mood, `${s.percent}%`, { bold: true })}
                   {t(MUTED, '  ')}
                   {barCells}
@@ -1119,7 +1132,7 @@ export const register: Register = (on, options) => {
               ) : (
                 [
                   <Text key="head" {...bg} wrap="truncate-end">
-                    {t(MUTED, 'CONTEXT  ')}
+                    {label('CONTEXT')}
                     {t(mood, `${s.percent}%`, { bold: true })}
                     {t(MUTED, `   ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`)}
                   </Text>,
@@ -1129,10 +1142,11 @@ export const register: Register = (on, options) => {
                 ]
               )}
               <Text {...bg} wrap="truncate-end">
+                {t(MUTED, ' '.repeat(LABEL))}
                 {used.map((r, i) => (
                   <Text key={`l${i}`} {...bg}>
                     {t(colorFor(r), '● ')}
-                    {t(MUTED, `${shortName(r.name)} ${compact(r.tokens)}${i < used.length - 1 ? '   ' : ''}`)}
+                    {t(MUTED, `${shortName(r.name)} ${compact(r.tokens)}${i < used.length - 1 ? '  ' : ''}`)}
                   </Text>
                 ))}
               </Text>

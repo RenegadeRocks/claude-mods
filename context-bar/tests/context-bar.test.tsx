@@ -612,7 +612,7 @@ test('a wide window puts the pet beside its info rows and the context on one row
 
   // the label, the bar and the token counts share one row
   const texts = await textsOf(ui)
-  expect(texts.some(t => /^CONTEXT {2}42% {2}█+.*░+ {2}84k \/ 200k$/.test(t))).toBe(true)
+  expect(texts.some(t => /^CONTEXT 42% {2}█+.*░+ {2}84k \/ 200k$/.test(t))).toBe(true)
   await ui.unmount()
 })
 

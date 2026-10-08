@@ -108,8 +108,11 @@ export type Pomodoro = { phase: 'idle' | 'focus' | 'break'; endsAt: number | nul
 /** The desk's ambient sound. */
 export type Ambient = 'off' | 'rain' | 'storm' | 'fire' | 'focus'
 
+/** How strongly the desk's clock and lamp glow: `/context-bar glow soft|bright`. */
+export type Glow = 'soft' | 'bright'
+
 /** What the desk's surface module draws from; plain data. */
-export type DeskProps = { goal: string; pomodoro: Pomodoro; ambient: Ambient; now: number }
+export type DeskProps = { goal: string; pomodoro: Pomodoro; ambient: Ambient; glow: Glow; now: number }
 
 /** What the desk posts to the hooks module when it is clicked or typed into. */
 export type DeskMessage = { type: 'goal'; text: string } | { type: 'pomodoro' } | { type: 'ambient' }

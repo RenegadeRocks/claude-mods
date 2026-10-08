@@ -4,7 +4,7 @@
 // orange neon clock in a thin double-line frame, drawn as text so it stays sharp. Pure: the same inputs paint the same
 // scene, so the surface module just lays out what this returns.
 
-import type { Ambient, Pomodoro } from '../types'
+import type { Ambient, Glow, Pomodoro } from '../types'
 
 export type DeskCell = { ch: string; fg: string; bg: string; bold?: boolean }
 
@@ -100,12 +100,13 @@ function glowAt(x: number, y: number, power: number): number {
  * Paints the wall, window, plant, mug and lamp into a pixel grid
  * [x][y] of DESK_WIDTH × PX_HEIGHT colours.
  */
-function paintPixels(frame: number, ambient: Ambient, isLampOn: boolean, sky: number): string[][] {
+function paintPixels(frame: number, ambient: Ambient, isLampOn: boolean, sky: number, glow: Glow): string[][] {
+  const isSoft = glow === 'soft'
   // the lamp breathes a little; by the fire it flickers
   const flicker = ambient === 'fire' ? 0.85 + 0.15 * Math.sin(frame * 1.7) * Math.sin(frame * 0.6) : 1
   // by morning the lamp matters less, and daylight warms the wall
   const daylight = Math.min(1, Math.max(0, (sky - 0.5) / 0.8))
-  const power = isLampOn ? 0.5 * flicker * (1 - 0.5 * daylight) : 0
+  const power = isLampOn ? (isSoft ? 0.38 : 0.5) * flicker * (1 - 0.5 * daylight) : 0
   const px: string[][] = []
   for (let x = 0; x < DESK_WIDTH; x++) {
     const column: string[] = []
@@ -128,9 +129,9 @@ function paintPixels(frame: number, ambient: Ambient, isLampOn: boolean, sky: nu
   // the neon clock's orange glow, spilling onto the wall around it
   for (let x = CLOCK.x0 - 6; x <= CLOCK.x1 + 6; x++) {
     for (let y = 0; y <= 9; y++) {
-      const d = Math.hypot((x - (CLOCK.x0 + CLOCK.x1) / 2) / 10, (y - 2.5) / 5)
+      const d = Math.hypot((x - (CLOCK.x0 + CLOCK.x1) / 2) / (isSoft ? 7 : 10), (y - 2.5) / (isSoft ? 3.5 : 5))
       const column = px[x]
-      if (column && d < 1) column[y] = mix(column[y] ?? '#1b1828', CLOCK_GLOW, 0.55 * (1 - d) ** 1.3)
+      if (column && d < 1) column[y] = mix(column[y] ?? '#1b1828', CLOCK_GLOW, (isSoft ? 0.32 : 0.55) * (1 - d) ** 1.3)
     }
   }
 
@@ -261,8 +262,15 @@ function clockCell(cx: number, cy: number, now: Date, wall: string): DeskCell | 
 }
 
 /** The scene's cells, top to bottom: six rows of wall, one of desk top. */
-export function paintScene(frame: number, now: Date, ambient: Ambient, isLampOn: boolean, sky = 0): DeskCell[][] {
-  const px = paintPixels(frame, ambient, isLampOn, Number.isFinite(sky) ? Math.min(1.3, Math.max(0, sky)) : 0)
+export function paintScene(
+  frame: number,
+  now: Date,
+  ambient: Ambient,
+  isLampOn: boolean,
+  sky = 0,
+  glow: Glow = 'bright',
+): DeskCell[][] {
+  const px = paintPixels(frame, ambient, isLampOn, Number.isFinite(sky) ? Math.min(1.3, Math.max(0, sky)) : 0, glow)
   const rows: DeskCell[][] = []
   for (let cy = 0; cy < SCENE_ROWS; cy++) {
     const row: DeskCell[] = []

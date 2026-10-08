@@ -24,9 +24,9 @@ const SAVE_HINT = ' enter saves '
 const IDLE_SAVE_FRAMES = 120
 
 const WOOD = '#5e3b28'
-const PAPER = '#efe6d2'
+const PAPER = '#ddd2ba'
 const INK = '#2a2340'
-const FADED_INK = '#8a8296'
+const FADED_INK = '#7a7286'
 const BRASS = '#f9e2af'
 const TEAL = '#94e2d5'
 
@@ -153,7 +153,7 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
   if (latest.isEditing && latest.frame - latest.typedAt > IDLE_SAVE_FRAMES) saveGoal(latest)
 
   // the window's sky follows the focus timer: dawn as you focus, morning on the break
-  const scene = paintScene(local.frame, new Date(now), props.ambient, local.isLampOn, skyFor(props.pomodoro, now))
+  const scene = paintScene(local.frame, new Date(now), props.ambient, local.isLampOn, skyFor(props.pomodoro, now), props.glow)
 
   // the drawer: the focus timer on the left, the ambient sound on the right
   const { phase, endsAt, rounds } = props.pomodoro
