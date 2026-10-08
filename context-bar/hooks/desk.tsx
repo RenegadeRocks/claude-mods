@@ -19,8 +19,9 @@ const SOUND_START = DESK_WIDTH - 16
 const NOTE_WIDTH = DESK_WIDTH - 2
 const MAX_GOAL = 120
 const SAVE_HINT = ' enter saves '
-// keys with a name rather than a character; none of them types into the note
-const NAMED_KEYS = new Set(['up', 'down', 'left', 'right', 'tab', 'delete', 'pageup', 'pagedown', 'home', 'end', 'escape'])
+// an open note with no typing for this many frames (30 s) saves itself: Escape
+// hands the keyboard back without telling the desk
+const IDLE_SAVE_FRAMES = 120
 
 const WOOD = '#5e3b28'
 const PAPER = '#efe6d2'
@@ -31,7 +32,27 @@ const TEAL = '#94e2d5'
 
 const SOUND_NAMES: Record<Ambient, string> = { off: 'sounds off', rain: 'rain', storm: 'thunderstorm', fire: 'fireplace', focus: 'deep focus' }
 
-type Local = { frame: number; baseNow: number; baseFrame: number; isEditing: boolean; draft: string; isLampOn: boolean }
+type Local = {
+  frame: number
+  baseNow: number
+  baseFrame: number
+  isEditing: boolean
+  draft: string
+  /** The frame of the last key typed into the note. */
+  typedAt: number
+  isLampOn: boolean
+}
+
+/**
+ * What a key types into the note: a character, a space, or a pasted run of
+ * text; null for a named key such as 'pagedown' or 'f5'.
+ */
+function typedText(key: string): string | null {
+  if (key === 'space') return ' '
+  if ([...key].length === 1) return key
+  // a lowercase word is a key's name; a paste has spaces, capitals or punctuation
+  return /^[a-z0-9]+$/.test(key) ? null : key.replace(/[\r\n\t]+/g, ' ')
+}
 
 function clockText(ms: number): string {
   const total = Math.max(0, Math.ceil(ms / 1000))
@@ -40,7 +61,7 @@ function clockText(ms: number): string {
 
 const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
   const { Box, Text } = surface.elements
-  const fresh: Local = { frame: 0, baseNow: props.now, baseFrame: 0, isEditing: false, draft: '', isLampOn: true }
+  const fresh: Local = { frame: 0, baseNow: props.now, baseFrame: 0, isEditing: false, draft: '', typedAt: 0, isLampOn: true }
   if (surface.state === undefined) {
     surface.setState(fresh)
     surface.every(FRAME_MS, () => {
@@ -66,7 +87,7 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
     if (e.y === NOTE_ROW) {
       // the click gives the desk the keyboard; a second click saves
       if (s.isEditing) saveGoal(s)
-      else surface.setState({ ...s, isEditing: true, draft: props.goal.trim() })
+      else surface.setState({ ...s, isEditing: true, draft: props.goal.trim(), typedAt: s.frame })
     } else if (e.y === DRAWER_ROW && e.x < TIMER_END) {
       post({ type: 'pomodoro' })
     } else if (e.y === DRAWER_ROW && e.x >= SOUND_START) {
@@ -81,12 +102,15 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
     const s = surface.state
     if (!s?.isEditing || e.ctrl || e.meta) return
     if (e.key === 'return') saveGoal(s)
-    else if (e.key === 'backspace') surface.setState({ ...s, draft: s.draft.slice(0, -1) })
-    else if (!NAMED_KEYS.has(e.key)) {
-      const typed = e.key === 'space' ? ' ' : e.key.replace(/[\r\n\t]+/g, ' ')
-      surface.setState({ ...s, draft: (s.draft + typed).slice(0, MAX_GOAL) })
+    else if (e.key === 'backspace') surface.setState({ ...s, draft: s.draft.slice(0, -1), typedAt: s.frame })
+    else {
+      const typed = typedText(e.key)
+      if (typed !== null) surface.setState({ ...s, draft: (s.draft + typed).slice(0, MAX_GOAL), typedAt: s.frame })
     }
   })
+
+  const latest = surface.state ?? local
+  if (latest.isEditing && latest.frame - latest.typedAt > IDLE_SAVE_FRAMES) saveGoal(latest)
 
   // the window's sky follows the focus timer: dawn as you focus, morning on the break
   const scene = paintScene(local.frame, new Date(now), props.ambient, local.isLampOn, skyFor(props.pomodoro, now))

@@ -35,7 +35,10 @@ export function gpuStep(
   if (reading.util >= BUSY) {
     busySince ??= now
     quietSince = null
-  } else if (reading.util < QUIET && busySince !== null) {
+  } else if (reading.util >= QUIET) {
+    // between quiet and busy: still working, so the quiet stretch starts over
+    quietSince = null
+  } else if (busySince !== null) {
     quietSince ??= now
     if (now - quietSince >= QUIET_MS) {
       if (quietSince - busySince >= JOB_MS) finishedMinutes = Math.max(1, Math.round((quietSince - busySince) / 60_000))

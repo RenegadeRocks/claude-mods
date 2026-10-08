@@ -175,8 +175,11 @@ let phaseSeq = 0
 let tick = 0
 let hasAgents = false
 let lastAgentsKey = ''
-// render watch: whether nvidia-smi answers here, and the job being watched
-let smiMissing = false
+// render watch: failed reads in a row (no nvidia-smi here after a few), a read
+// in flight, and the job being watched
+const SMI_GIVE_UP = 3
+let smiFailures = 0
+let isSmiBusy = false
 let gpuTrack = NO_TRACK
 // wellness: activity seen since the last tick, and when it last was
 let activitySeen = false
@@ -184,9 +187,11 @@ let lastActivity = 0
 let isWindows: boolean | null = null
 // when the pet last chimed for an alert still waiting for a click
 let lastChime = 0
-// the ambient loop playing now: a stop for macOS, a pid file on Windows
+// the ambient loop playing now: a stop for macOS, the player's stream on
+// Windows, and a count that moves on each change so an older loop ends itself
 let stopMacAmbient: AbortController | null = null
-let ambientPidFile: string | null = null
+let ambientStream: ReturnType<EngineInterface['process']['spawn']> | null = null
+let ambientSeq = 0
 const agentNames = new Map<string, string>()
 
 /** A fun name per subagent, kept for as long as the session lives. */
@@ -304,10 +309,14 @@ async function coachReading($: EngineInterface, lim: Limit | null) {
 async function coachClock($: EngineInterface) {
   try {
     const now = await $.clock.now()
-    const c = await read($, coach)
-    const ready = coachTick(c, now)
-    if (!ready) return
-    await update($, coach, () => ready)
+    // decided inside the update, so a reading that lands meanwhile isn't lost
+    let isReset = false
+    await update($, coach, c => {
+      const ready = coachTick(c, now)
+      isReset = ready !== null
+      return ready ?? c
+    })
+    if (!isReset) return
     $.ui.toast('Your 5-hour limit has reset. Press Continue on the card to pick up where you left off.', {
       timeoutMs: 10_000,
     })
@@ -316,17 +325,25 @@ async function coachClock($: EngineInterface) {
   }
 }
 
-/** The Continue button: clears the reset note and asks Claude to carry on. */
-/** An action button: its prompt goes in as if typed, queued while a turn runs. */
 /** Render watch: one GPU reading; a job that just ended gets a toast and a cheer from the pet. */
 async function pollGpu($: EngineInterface) {
-  if (smiMissing) return
+  if (smiFailures >= SMI_GIVE_UP || isSmiBusy) return
+  isSmiBusy = true
   try {
-    const { exitCode, stdout } = await $.process.run(
-      ['nvidia-smi', '--query-gpu=utilization.gpu,memory.used,memory.total', '--format=csv,noheader,nounits'],
-      { timeoutMs: 4000 },
-    )
-    const reading = exitCode === 0 ? parseSmi(stdout) : null
+    let result: { exitCode: number | null; stdout: string }
+    try {
+      result = await $.process.run(
+        ['nvidia-smi', '--query-gpu=utilization.gpu,memory.used,memory.total', '--format=csv,noheader,nounits'],
+        { timeoutMs: 4000 },
+      )
+    } catch {
+      // no NVIDIA GPU or no nvidia-smi gives up after a few tries; a slow
+      // reading under a heavy render just waits for the next one
+      smiFailures++
+      return
+    }
+    smiFailures = 0
+    const reading = result.exitCode === 0 ? parseSmi(result.stdout) : null
     if (!reading) return
     const step = gpuStep(gpuTrack, await $.clock.now(), reading)
     gpuTrack = step.track
@@ -339,8 +356,9 @@ async function pollGpu($: EngineInterface) {
       void playSound($, 'cheer')
     }
   } catch {
-    // no NVIDIA GPU or no nvidia-smi: stop asking
-    smiMissing = true
+    // try again on the next reading
+  } finally {
+    isSmiBusy = false
   }
 }
 
@@ -350,7 +368,8 @@ async function wellnessClock($: EngineInterface, eyesMs: number, waterMs: number
     const now = await $.clock.now()
     if (activitySeen || lastActivity === 0) lastActivity = now
     activitySeen = false
-    if ((await $.store.get('nudges')) === false) return
+    // the reminder chime also covers a finished GPU job, so it runs with nudges off too
+    if ((await $.store.get('nudges')) === false) return void remind($, now)
     let nudged: 'eyes' | 'water' | null = null
     await update($, wellness, w => {
       const step = wellnessTick(w, now - lastActivity, MINUTE_TICK_MS, eyesMs, waterMs)
@@ -377,7 +396,7 @@ async function playSound($: EngineInterface, clip: 'nudge' | 'cheer' | 'bell') {
     if ((await $.store.get('sounds')) === false) return
     isWindows ??= (await $.env.get('OS')) === 'Windows_NT'
     if (isWindows) {
-      const file = `${$.plugin.root}\\sounds\\${clip}.wav`.replace(/'/g, "''")
+      const file = `${$.plugin.root}\\sounds\\${clip}.wav`.replace(/['‘’]/g, q => q + q)
       await $.process.run(
         ['powershell', '-NoProfile', '-NonInteractive', '-Command', `(New-Object Media.SoundPlayer '${file}').PlaySync()`],
         { timeoutMs: 10_000 },
@@ -465,7 +484,8 @@ async function openPath($: EngineInterface, path: string, isReveal: boolean) {
     const argv = isWindows
       ? isReveal
         ? ['explorer', `/select,${path}`]
-        : ['cmd', '/c', 'start', '', path]
+        : // Explorer opens a file in its default app; cmd's start would read & and ^ in a name
+          ['explorer', path]
       : isReveal
         ? ['open', '-R', path]
         : ['open', path]
@@ -491,20 +511,19 @@ async function loadGoal($: EngineInterface) {
   }
 }
 
-/** Stops whatever ambient loop is playing. */
-async function stopAmbient($: EngineInterface) {
+/**
+ * Stops whatever ambient loop is playing. Ending a spawned player's stream
+ * ends the player; a loop also notices the count has moved and leaves.
+ */
+function stopAmbient() {
+  ambientSeq++
+  stopMacAmbient?.abort()
+  stopMacAmbient = null
+  const stream = ambientStream
+  ambientStream = null
   try {
-    stopMacAmbient?.abort()
-    stopMacAmbient = null
-    if (ambientPidFile) {
-      const pid = (await $.fs.read(ambientPidFile).catch(() => '')).trim()
-      ambientPidFile = null
-      if (/^\d+$/.test(pid)) {
-        await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', `Stop-Process -Id ${pid} -Force`], {
-          timeoutMs: 10_000,
-        })
-      }
-    }
+    // the value is what the loop would have ended with; nothing reads it
+    void stream?.return(undefined as never).catch(() => undefined)
   } catch {
     // it may have ended on its own
   }
@@ -512,30 +531,32 @@ async function stopAmbient($: EngineInterface) {
 
 /**
  * Loops an ambient sound until stopped. On Windows a hidden PowerShell plays
- * it and writes its process id, so it can be stopped; Claude Code ends it
- * with the session. On macOS the engine plays it.
+ * it and ticks every half second; the loop reading those ticks is the
+ * player's life, so leaving it (on a change, or with the session) ends the
+ * sound. On macOS the engine plays it.
  */
 async function playAmbient($: EngineInterface, kind: Ambient) {
-  await stopAmbient($)
+  stopAmbient()
+  const mine = ambientSeq
   if (kind === 'off') return
   try {
     isWindows ??= (await $.env.get('OS')) === 'Windows_NT'
+    // a quicker click may have changed the sound while this one waited
+    if (mine !== ambientSeq) return
     if (!isWindows) {
       const stop = new AbortController()
       stopMacAmbient = stop
       await $.audio.play({ asset: `sounds/ambient-${kind}.wav` }, { shouldLoop: true, signal: stop.signal })
       return
     }
-    const temp = (await $.env.get('TEMP')) ?? $.plugin.root
-    const pidFile = `${temp}\\context-bar-ambient.pid`
-    ambientPidFile = pidFile
-    const file = `${$.plugin.root}\\sounds\\ambient-${kind}.wav`.replace(/'/g, "''")
+    const file = `${$.plugin.root}\\sounds\\ambient-${kind}.wav`.replace(/['‘’]/g, q => q + q)
     const script =
-      `$PID | Out-File -Encoding ascii '${pidFile.replace(/'/g, "''")}'; ` +
-      `$p = New-Object Media.SoundPlayer '${file}'; $p.PlayLooping(); Start-Sleep -Seconds 86400`
+      `$p = New-Object Media.SoundPlayer '${file}'; $p.PlayLooping(); ` +
+      `while ($true) { [Console]::Out.WriteLine('.'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 500 }`
     const stream = $.process.spawn({ argv: ['powershell', '-NoProfile', '-NonInteractive', '-Command', script] })
-    for await (const _piece of stream) {
-      // it prints nothing; the loop lasts as long as the sound
+    ambientStream = stream
+    for await (const _tick of stream) {
+      if (mine !== ambientSeq) break
     }
   } catch {
     // no sound this time
@@ -545,16 +566,20 @@ async function playAmbient($: EngineInterface, kind: Ambient) {
 /** The focus timer's clock: a finished focus starts a break, a finished break rests. */
 async function pomodoroClock($: EngineInterface, now: number) {
   try {
-    const p = await read($, pomodoro)
-    if (p.phase === 'idle' || p.endsAt === null || now < p.endsAt) return
-    if (p.phase === 'focus') {
-      const rest: Pomodoro = { phase: 'break', endsAt: now + BREAK_MS, rounds: p.rounds + 1 }
-      await update($, pomodoro, () => rest)
-      $.ui.toast('Focus round done! Take a 5-minute break.', { timeoutMs: 10_000 })
-    } else {
-      await update($, pomodoro, () => ({ ...IDLE_POMODORO, rounds: p.rounds }))
-      $.ui.toast('Break over. Click the timer on the desk for another round.', { timeoutMs: 10_000 })
-    }
+    // decided inside the update, so a click on the timer meanwhile wins
+    let ended: Pomodoro['phase'] = 'idle'
+    await update($, pomodoro, (p): Pomodoro => {
+      if (p.phase === 'idle' || p.endsAt === null || now < p.endsAt) return p
+      ended = p.phase
+      return p.phase === 'focus'
+        ? { phase: 'break', endsAt: now + BREAK_MS, rounds: p.rounds + 1 }
+        : { ...IDLE_POMODORO, rounds: p.rounds }
+    })
+    if (ended === 'idle') return
+    $.ui.toast(
+      ended === 'focus' ? 'Focus round done! Take a 5-minute break.' : 'Break over. Click the timer on the desk for another round.',
+      { timeoutMs: 10_000 },
+    )
     void playSound($, 'bell')
   } catch {
     // check again next tick
@@ -710,6 +735,8 @@ export const register: Register = (on, options) => {
     const chosen = await $.store.get('pet')
     const kind = chosen === 'dog' || chosen === 'cat' ? chosen : petOption
     await update($, pet, () => kind)
+    // a `-p` run or the SDK draws no card: no timers, polling or ambient sound
+    if (!e.isInteractive) return next(e)
     await refresh($)
     if (!(await read($, quote))) await rollQuote($)
     void fetchWeather($, city, unit)
@@ -789,15 +816,17 @@ export const register: Register = (on, options) => {
 
   // `/clear` starts a new conversation in the same process, with no
   // session.start: the tally and the names start over with it
-  on('session.end', ($, e, next) => {
-    if (e.reason === 'clear') {
-      agentNames.clear()
-      lastAgentsKey = ''
-      void update($, spend, () => NO_SPEND).catch(() => {})
-      void update($, agents, () => []).catch(() => {})
-      void refresh($)
-    }
-    return next(e)
+  on('session.end', async ($, e, next) => {
+    if (e.reason !== 'clear') return next(e)
+    agentNames.clear()
+    lastAgentsKey = ''
+    void update($, spend, () => NO_SPEND).catch(() => {})
+    void update($, agents, () => []).catch(() => {})
+    void update($, output, () => null).catch(() => {})
+    // read the fresh session once the clear has gone through, not the old one
+    const ended = await next(e)
+    void refresh($)
+    return ended
   })
 
   on('ui.message', { element: 'fun' }, async ($, e, next) => {

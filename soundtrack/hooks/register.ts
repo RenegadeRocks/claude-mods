@@ -22,7 +22,7 @@ async function play($: EngineInterface, clip: Clip) {
   try {
     if (isWindows === null) isWindows = (await $.env.get('OS')) === 'Windows_NT'
     if (isWindows) {
-      const file = `${$.plugin.root}\\sounds\\${clip}.wav`.replace(/'/g, "''")
+      const file = `${$.plugin.root}\\sounds\\${clip}.wav`.replace(/['‘’]/g, q => q + q)
       await $.process.run(
         ['powershell', '-NoProfile', '-NonInteractive', '-Command', `(New-Object Media.SoundPlayer '${file}').PlaySync()`],
         { timeoutMs: 10_000 },

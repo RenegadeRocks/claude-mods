@@ -44,18 +44,27 @@ async function remember($: EngineInterface, change: Project) {
   }
 }
 
-/** Sets the prompt bar to this project's colour, choosing and saving one for a new project. */
 /** Whether `/project-colors off` is in force; read from the store each time, so it holds across sessions. */
 async function isOff($: EngineInterface): Promise<boolean> {
   return (await $.store.get('isOn')) === false
 }
 
+/** The colours /color takes: the list it last printed, else the known ones. */
+async function knownColors($: EngineInterface): Promise<string[]> {
+  const saved = await $.store.get('colors')
+  return Array.isArray(saved) && saved.length > 0 ? (saved as string[]) : DEFAULT_COLORS
+}
+
+/**
+ * Sets the prompt bar to this project's colour, choosing and saving one for a
+ * new project. A project you set to `default` yourself stays plain.
+ */
 async function applyColor($: EngineInterface) {
   try {
     if (await isOff($)) return
     const { key, folder, projects } = await thisProject($)
-    const saved = await $.store.get('colors')
-    const colors = Array.isArray(saved) && saved.length > 0 ? (saved as string[]) : DEFAULT_COLORS
+    if (projects[key]?.color === 'default') return
+    const colors = await knownColors($)
     let color = projects[key]?.color ?? pickColor(folder, colors)
     const { text } = await $.command.run({ command: 'color', args: color } as never)
     // a colour /color no longer takes: learn the real list from its answer and pick again
@@ -108,9 +117,11 @@ export const register: Register = on => {
   // learn from what you choose yourself; this mod's own runs come from a plugin
   on('command.run', { command: 'color' }, async ($, e, next) => {
     const result = await next(e)
-    const color = e.args.trim()
-    if (e.origin.kind === 'composer' && color && !/invalid|cannot/i.test(result.text ?? '')) {
-      void remember($, { color: color === 'default' ? undefined : color })
+    // only a colour /color takes; a typo it refused is not remembered
+    const color = e.args.trim().toLowerCase()
+    const isKnown = color === 'default' || (await knownColors($)).includes(color)
+    if (e.origin.kind === 'composer' && isKnown && !/invalid|cannot|available colors/i.test(result.text ?? '')) {
+      void remember($, { color })
     }
     return result
   })

@@ -749,7 +749,7 @@ test('the newest image or video saved this session shows, with Open and Folder',
   await ui.press({ key: 'open-output' })
   await ui.press({ key: 'open-folder' })
   await clock.settle()
-  expect(processes).toContainEqual(['cmd', '/c', 'start', '', '/proj/renders/after_v3.mp4'])
+  expect(processes).toContainEqual(['explorer', '/proj/renders/after_v3.mp4'])
   expect(processes).toContainEqual(['explorer', '/select,/proj/renders/after_v3.mp4'])
   await ui.unmount()
 })
