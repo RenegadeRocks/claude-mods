@@ -61,7 +61,7 @@ const spend = atom({ plugin: 'context-bar', key: 'spend' } as const, NO_SPEND)
 const pet = atom({ plugin: 'context-bar', key: 'pet' } as const, 'cat')
 const coach = atom({ plugin: 'context-bar', key: 'coach' } as const, NO_COACH)
 const gpu = atom({ plugin: 'context-bar', key: 'gpu' } as const, null)
-const cheer = atom({ plugin: 'context-bar', key: 'cheer' } as const, 0)
+const celebrate = atom({ plugin: 'context-bar', key: 'celebrate' } as const, null)
 const wellness = atom({ plugin: 'context-bar', key: 'wellness' } as const, NO_WELLNESS)
 const output = atom({ plugin: 'context-bar', key: 'output' } as const, null)
 const effortChoice = atom({ plugin: 'context-bar', key: 'effortChoice' } as const, null)
@@ -86,6 +86,8 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 const SPINNER_MS = 280
 const MINUTE_TICK_MS = 10_000
 const GPU_POLL_MS = 5000
+// an alert the pet is giving chimes again this often until it is clicked
+const REMIND_MS = 5 * 60_000
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 // newest-output search: these kinds of file, this deep, skipping these folders
 const MEDIA = /\.(png|jpe?g|webp|gif|mp4|mov|webm|mkv|avi)$/i
@@ -156,6 +158,8 @@ let gpuTrack = NO_TRACK
 let activitySeen = false
 let lastActivity = 0
 let isWindows: boolean | null = null
+// when the pet last chimed for an alert still waiting for a click
+let lastChime = 0
 const agentNames = new Map<string, string>()
 
 /** A fun name per subagent, kept for as long as the session lives. */
@@ -230,8 +234,13 @@ async function addSpend(
   $: EngineInterface,
   u: { model: string; input_tokens: number; output_tokens: number; cache_read_input_tokens: number; cache_creation_input_tokens: number },
 ) {
-  const [inRate, outRate, writeRate, readRate] = ratesFor(u.model)
+  const [inRate, outRate, shortWriteRate, readRate] = ratesFor(u.model)
   try {
+    // Claude Code keeps a subscription's cache for an hour, and an hour-long
+    // write costs 2x input; with an API key it keeps 5 minutes, at 1.25x. A
+    // reported 5-hour limit means a subscription.
+    const isSubscription = (await read($, snap))?.fiveHour != null
+    const writeRate = isSubscription ? inRate * 2 : shortWriteRate
     await update($, spend, s => ({
       input: s.input + u.input_tokens,
       output: s.output + u.output_tokens,
@@ -296,8 +305,11 @@ async function pollGpu($: EngineInterface) {
     gpuTrack = step.track
     await update($, gpu, () => step.gpu)
     if (step.finishedMinutes !== null) {
-      await update($, cheer, n => n + 1)
-      $.ui.toast(`GPU job finished after ${step.finishedMinutes}m. Rocky is celebrating!`, { timeoutMs: 8000 })
+      const minutes = step.finishedMinutes
+      await update($, celebrate, () => minutes)
+      $.ui.toast(`GPU job finished after ${minutes}m. Rocky is celebrating until you click him!`, { timeoutMs: 10_000 })
+      lastChime = await $.clock.now()
+      void playSound($, 'cheer')
     }
   } catch {
     // no NVIDIA GPU or no nvidia-smi: stop asking
@@ -318,17 +330,61 @@ async function wellnessClock($: EngineInterface, eyesMs: number, waterMs: number
       nudged = step.nudged
       return step.next
     })
-    if (nudged) $.ui.toast(NUDGE_TOASTS[nudged], { timeoutMs: 10_000 })
+    if (nudged) {
+      $.ui.toast(NUDGE_TOASTS[nudged], { timeoutMs: 10_000 })
+      lastChime = now
+      void playSound($, 'nudge')
+    }
+    void remind($, now)
   } catch {
     // a missed tick changes little
   }
 }
 
-/** A click in the fun column: an effort or model change, or a nudge answered. */
+/**
+ * Plays one of the pet's clips without holding anything up. The engine's own
+ * player only sounds on macOS, so on Windows PowerShell plays the file.
+ */
+async function playSound($: EngineInterface, clip: 'nudge' | 'cheer') {
+  try {
+    if ((await $.store.get('sounds')) === false) return
+    isWindows ??= (await $.env.get('OS')) === 'Windows_NT'
+    if (isWindows) {
+      const file = `${$.plugin.root}\\sounds\\${clip}.wav`.replace(/'/g, "''")
+      await $.process.run(
+        ['powershell', '-NoProfile', '-NonInteractive', '-Command', `(New-Object Media.SoundPlayer '${file}').PlaySync()`],
+        { timeoutMs: 10_000 },
+      )
+    } else {
+      await $.audio.play({ asset: `sounds/${clip}.wav` })
+    }
+  } catch {
+    // a sound that cannot play is skipped
+  }
+}
+
+/** An alert still waiting for a click chimes again every few minutes, so it isn't missed. */
+async function remind($: EngineInterface, now: number) {
+  try {
+    if (now - lastChime < REMIND_MS) return
+    const [party, w] = await Promise.all([read($, celebrate), read($, wellness)])
+    if (party === null && w.due === null) return
+    lastChime = now
+    await playSound($, party !== null ? 'cheer' : 'nudge')
+  } catch {
+    // try again next tick
+  }
+}
+
+/** A click in the fun column: an effort or model change, or a nudge or a party answered. */
 async function funClicked($: EngineInterface, message: FunMessage) {
   try {
     if (message.type === 'nudge-done') {
       await update($, wellness, wellnessDone)
+      return
+    }
+    if (message.type === 'celebrate-done') {
+      await update($, celebrate, () => null)
       return
     }
     if (message.type === 'effort' && EFFORT_LEVELS.includes(message.level)) {
@@ -625,6 +681,12 @@ export const register: Register = (on, options) => {
 
     // `/context-bar pet dog`, `/context-bar pet cat`, or `/context-bar pet` to swap
     const words = arg.split(/\s+/)
+    if (words[0] === 'sounds') {
+      const isOn = words[1] !== 'off'
+      await $.store.set('sounds', isOn)
+      return { text: isOn ? "Rocky's sounds are on." : "Rocky is quiet now, until /context-bar sounds on." }
+    }
+
     if (words[0] === 'nudges') {
       const isOn = words[1] !== 'off'
       await $.store.set('nudges', isOn)
@@ -695,9 +757,9 @@ export const register: Register = (on, options) => {
     ])
     const current: Phase = e.props.isWorking ? (stored === 'idle' ? 'thinking' : stored) : 'idle'
     const mood = percentColor(s.percent)
-    const [gpuNow, cheers, wellnessNow, chosenEffort, newest] = await Promise.all([
+    const [gpuNow, party, wellnessNow, chosenEffort, newest] = await Promise.all([
       read($, gpu),
-      read($, cheer),
+      read($, celebrate),
       read($, wellness),
       read($, effortChoice),
       read($, output),
@@ -726,7 +788,7 @@ export const register: Register = (on, options) => {
       percent: s.percent,
       gpu: gpuNow,
       nudge: wellnessNow.due,
-      cheer: cheers,
+      celebrate: party,
     }
 
     // Context: used rows, then the compaction buffer, then free space.

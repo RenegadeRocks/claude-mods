@@ -430,8 +430,9 @@ test('the cache savings and the API bill, itemized', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /^in <\$0\.01$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^out \$0\.02$/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /^read \$0\.02$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^write \$0\.02$/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^other \$0\.04$/ })).toBeDefined()
+  // a subscription's cache lasts an hour, and an hour-long write costs 2x input
+  expect(await ui.find({ type: 'Text', text: /^write \$0\.04$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^other \$0\.02$/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -488,14 +489,14 @@ test('the cost breakdown moves under the bar when it would not fit beside it', a
 
   const wide = await mountBand($, { ...props, bodyColumns: 200 })
   const wideRow = (await textsOf(wide)).find(t => t.startsWith('API $'))
-  expect(wideRow).toMatch(/other \$0\.04/)
+  expect(wideRow).toMatch(/other \$0\.02/)
   await wide.unmount()
 
   const narrow = await mountBand($, { ...props, bodyColumns: 100 })
   const texts = await textsOf(narrow)
   const row = texts.find(t => t.startsWith('API $'))
   expect(row).toMatch(/\$0\.10$/)
-  expect(texts.some(t => /^\s+● in .*● other \$0\.04/.test(t))).toBe(true)
+  expect(texts.some(t => /^\s+● in .*● other \$0\.02/.test(t))).toBe(true)
   await narrow.unmount()
 })
 
@@ -678,6 +679,10 @@ test('after 20 active minutes Rocky asks you to rest your eyes; a click answers 
     await clock.advance(4 * 60_000)
   }
   expect(toasts.some(t => /rest your eyes/.test(t))).toBe(true)
+  const chimes = () => processes.filter(p => p.join(' ').includes('nudge.wav')).length
+  expect(chimes()).toBe(1)
+  await clock.advance(5 * 60_000 + 10_000)
+  expect(chimes()).toBe(2)
   const ui = await mountBand($)
   expect((await funTextsOf(ui)).some(t => /rest your eyes/.test(t))).toBe(true)
   expect((await funTextsOf(ui)).some(t => /click when done/.test(t))).toBe(true)
@@ -712,8 +717,16 @@ test('render watch shows the GPU while it works and cheers when a job ends', asy
   gpuUtil = 3
   await clock.advance(30_000)
   expect(toasts.some(t => /GPU job finished after 2m/.test(t))).toBe(true)
+  expect(processes.some(p => p.join(' ').includes('cheer.wav'))).toBe(true)
   ui = await mountBand($)
   expect((await funTextsOf(ui)).some(t => /GPU/.test(t))).toBe(false)
+  // the pet keeps celebrating, reaction after reaction, until clicked
+  expect((await funTextsOf(ui)).some(t => /job done! click/.test(t))).toBe(true)
+  await ui.advance(20_000)
+  expect((await funTextsOf(ui)).some(t => /job done! click/.test(t))).toBe(true)
+  await ui.pointer({ type: 'down', x: 10, y: 7, button: 'left' })
+  await clock.settle()
+  expect((await funTextsOf(ui)).some(t => /job done! click/.test(t))).toBe(false)
   await ui.unmount()
 })
 
@@ -738,4 +751,16 @@ test('the newest image or video saved this session shows, with Open and Folder',
   expect(processes).toContainEqual(['cmd', '/c', 'start', '', '/proj/renders/after_v3.mp4'])
   expect(processes).toContainEqual(['explorer', '/select,/proj/renders/after_v3.mp4'])
   await ui.unmount()
+})
+
+test('/context-bar sounds off keeps Rocky quiet', async ($, on) => {
+  const clock = world(on)
+  await started($, clock)
+  await $.command.run({ command: 'context-bar', args: 'sounds off', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 100 } } as never)
+  for (let i = 0; i < 6; i++) {
+    await $.prompt.submit({ text: `p${i}`, wait: false, origin: { kind: 'composer' } } as never)
+    await clock.advance(4 * 60_000)
+  }
+  expect(toasts.some(t => /rest your eyes/.test(t))).toBe(true)
+  expect(processes.some(p => p.join(' ').includes('.wav'))).toBe(false)
 })

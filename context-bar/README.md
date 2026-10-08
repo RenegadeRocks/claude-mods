@@ -16,7 +16,7 @@ A Claude Code mod that puts a card above your prompt.
 
 **Render watch:** while the GPU works (NVIDIA cards), a line shows its load, memory and how long it has been busy. When a job of a minute or more finishes, you get a note and the pet celebrates.
 
-**Wellness nudges:** after 20 minutes of active work the pet closes its eyes and asks you to rest yours; after 60 it asks for a water break. Click the pet when you've done it. Time away counts as a break, so sessions that run for days don't matter. Change the minutes in `/plugin configure`, or turn them off with `/context-bar nudges off`.
+**Wellness nudges:** after 20 minutes of active work the pet closes its eyes and asks you to rest yours; after 60 it asks for a water break. Click the pet when you've done it. The pet chimes when a nudge or a finished GPU job needs you, and again every 5 minutes until you click; after a GPU job it keeps celebrating until then. `/context-bar sounds off` keeps it quiet. Time away counts as a break, so sessions that run for days don't matter. Change the minutes in `/plugin configure`, or turn them off with `/context-bar nudges off`.
 
 ## Install
 
@@ -36,6 +36,7 @@ Press `y` to add the marketplace, then pick the **user** scope so it shows in ev
 | `/context-bar on` | Shows it again |
 | `/context-bar pet dog` | Rocky becomes a dog (remembered) |
 | `/context-bar pet cat` | Rocky becomes a cat (remembered) |
+| `/context-bar sounds off` | The pet stops chiming (remembered); `sounds on` brings it back |
 | `/context-bar nudges off` | No more eye and water nudges (remembered); `nudges on` brings them back |
 
 ## Settings

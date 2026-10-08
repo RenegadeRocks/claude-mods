@@ -98,8 +98,8 @@ export type FunProps = {
   gpu: Gpu | null
   /** The nudge to show, until the pet is clicked. */
   nudge: Nudge | null
-  /** Goes up by one when a GPU job finishes, so the pet celebrates. */
-  cheer: number
+  /** Minutes the GPU job that just finished ran; the pet celebrates until clicked. */
+  celebrate: number | null
 }
 
 /** What the fun column posts to the hooks module when it is clicked. */
@@ -107,6 +107,7 @@ export type FunMessage =
   | { type: 'effort'; level: string }
   | { type: 'model'; alias: string }
   | { type: 'nudge-done' }
+  | { type: 'celebrate-done' }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -121,7 +122,7 @@ declare module 'claude-code' {
       pet: 'cat' | 'dog'
       coach: Coach
       gpu: Gpu | null
-      cheer: number
+      celebrate: number | null
       wellness: Wellness
       output: Output | null
       /** An effort chosen from the card or typed, for the model it was set on. */

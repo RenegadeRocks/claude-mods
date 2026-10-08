@@ -43,36 +43,33 @@ type Local = {
   last: string
   isHovered: boolean
   isPicking: boolean
-  cheered: number
 }
 
-const FRESH: Local = { frame: 0, reaction: null, last: '', isHovered: false, isPicking: false, cheered: 0 }
+const FRESH: Local = { frame: 0, reaction: null, last: '', isHovered: false, isPicking: false }
 
 const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
   const { Box, Text } = surface.elements
   if (surface.state === undefined) {
-    surface.setState({ ...FRESH, cheered: props.cheer })
+    surface.setState({ ...FRESH })
     surface.every(FRAME_MS, () => {
       const s = surface.state
       if (s) surface.setState({ ...s, frame: s.frame + 1 })
     })
   }
-  const local = surface.state ?? { ...FRESH, cheered: props.cheer }
+  const local = surface.state ?? { ...FRESH }
   const { frame } = local
-
-  // a GPU job that just finished: the pet celebrates
-  if (props.cheer > local.cheered) {
-    surface.setState({ ...local, cheered: props.cheer, reaction: { kind: 'sparkle', at: frame }, last: 'sparkle' })
-  }
+  const isPartying = props.celebrate !== null
 
   const mood = percentColor(props.percent)
   const stage = petStage(props.pet, props.percent)
   const reaction = local.reaction ? { kind: local.reaction.kind, t: frame - local.reaction.at } : null
-  const plate = props.nudge
-    ? { text: 'click when done', color: PINK }
-    : local.isHovered
-      ? { text: `♥ pet ${PET_NAME}`, color: PINK }
-      : { text: `${PET_NAME} · ${stage.title}`, color: mood }
+  const plate = isPartying
+    ? { text: 'job done! click', color: PINK }
+    : props.nudge
+      ? { text: 'click when done', color: PINK }
+      : local.isHovered
+        ? { text: `♥ pet ${PET_NAME}`, color: PINK }
+        : { text: `${PET_NAME} · ${stage.title}`, color: mood }
   const view = petView(stage.lines, props.pet, props.phase, frame, props.percent >= 85, plate, reaction, props.nudge)
   const effortLevel = EFFORTS.indexOf(props.effort ?? '') + 1
   const anim = props.phase === 'thinking' ? thinkingCells(frame) : props.phase === 'working' ? workingCells(frame) : []
@@ -103,6 +100,11 @@ const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
     const isOverPet = e.type !== 'leave' && (isSide ? e.x < petWidth : e.y >= infoRows)
     if (e.type === 'down' && e.button === 'left') {
       if (isOverPet) {
+        if (isPartying) {
+          post({ type: 'celebrate-done' })
+          surface.setState({ ...s, reaction: { kind: 'hearts', at: s.frame }, last: 'hearts' })
+          return
+        }
         if (props.nudge) {
           post({ type: 'nudge-done' })
           surface.setState({ ...s, reaction: { kind: 'hearts', at: s.frame }, last: 'hearts' })
@@ -135,8 +137,13 @@ const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
     }
     if (isOverPet !== s.isHovered) surface.setState({ ...s, isHovered: isOverPet })
   })
-  // a finished reaction is dropped, so the next click starts clean
-  if (local.reaction && frame - local.reaction.at >= REACTION_FRAMES) {
+  // a finished reaction is dropped, so the next click starts clean; while a
+  // GPU job's party waits for a click, one dance or sparkle follows another
+  const isReactionOver = !local.reaction || frame - local.reaction.at >= REACTION_FRAMES
+  if (isPartying && isReactionOver) {
+    const kind = local.last === 'sparkle' ? 'dance' : 'sparkle'
+    surface.setState({ ...local, reaction: { kind, at: frame }, last: kind })
+  } else if (local.reaction && isReactionOver) {
     surface.setState({ ...local, reaction: null })
   }
 

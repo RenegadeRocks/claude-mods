@@ -103,7 +103,8 @@ export function prettyModel(raw: string): string {
 }
 
 // First-party API rates in dollars per million tokens: input, output,
-// 5-minute cache write (1.25x input) and cache read. Checked 2026-09.
+// 5-minute cache write (1.25x input) and cache read. Checked 2026-09. An
+// hour-long cache write, what Claude Code uses on a subscription, is 2x input.
 const PRICES: [match: RegExp, rates: [number, number, number, number]][] = [
   [/fable-5-1|mythos-5-1/, [10, 50, 12.5, 0.25]],
   [/fable|mythos/, [10, 50, 12.5, 1]],
