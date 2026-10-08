@@ -117,10 +117,10 @@ export const register: Register = on => {
   // learn from what you choose yourself; this mod's own runs come from a plugin
   on('command.run', { command: 'color' }, async ($, e, next) => {
     const result = await next(e)
-    // only a colour /color takes; a typo it refused is not remembered
+    // only a colour /color took; a typo it refused (it lists the colours then) is not remembered
     const color = e.args.trim().toLowerCase()
-    const isKnown = color === 'default' || (await knownColors($)).includes(color)
-    if (e.origin.kind === 'composer' && isKnown && !/invalid|cannot|available colors/i.test(result.text ?? '')) {
+    const isRefused = /invalid|cannot|available colors/i.test(result.text ?? '')
+    if (e.origin.kind === 'composer' && color && !isRefused) {
       void remember($, { color })
     }
     return result

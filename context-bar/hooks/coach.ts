@@ -24,6 +24,7 @@ export function minutesToFull(samples: [number, number][], now: number, lim: Lim
   const first = samples[0]
   const last = samples[samples.length - 1]
   if (!lim || !first || !last) return null
+  if (lim.percent >= 100) return 0
   const span = (last[0] - first[0]) / 60_000
   const rise = last[1] - first[1]
   if (span < MIN_SPAN_MINUTES || rise <= 0) return null
@@ -33,7 +34,7 @@ export function minutesToFull(samples: [number, number][], now: number, lim: Lim
 }
 
 export function etaText(eta: number): string {
-  return `full in ~${minutes(eta)}`
+  return eta <= 0 ? 'full: waits for the reset' : `full in ~${minutes(eta)}`
 }
 
 /** One new reading of the 5-hour window: the coach's next state, and a toast when one is due. */
@@ -55,7 +56,7 @@ export function coachStep(c: Coach, now: number, lim: Limit | null): { next: Coa
       warned = level
       toast =
         `5-hour limit at ${Math.round(lim.percent)}%` +
-        (eta ? `, ${etaText(eta)} at this pace` : '') +
+        (eta !== null && eta > 0 ? `, ${etaText(eta)} at this pace` : '') +
         '. /effort medium or a lighter /model makes it last longer.'
       break
     }

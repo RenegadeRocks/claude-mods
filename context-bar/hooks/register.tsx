@@ -550,9 +550,13 @@ async function playAmbient($: EngineInterface, kind: Ambient) {
       return
     }
     const file = `${$.plugin.root}\\sounds\\ambient-${kind}.wav`.replace(/['‘’]/g, q => q + q)
+    // it also ends itself when nobody reads its ticks or Claude Code is gone,
+    // so a hard-killed session can't leave a sound looping
     const script =
+      `$parent = (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId; ` +
       `$p = New-Object Media.SoundPlayer '${file}'; $p.PlayLooping(); ` +
-      `while ($true) { [Console]::Out.WriteLine('.'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 500 }`
+      `try { while (Get-Process -Id $parent -ErrorAction SilentlyContinue) { ` +
+      `[Console]::Out.WriteLine('.'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 500 } } catch { }`
     const stream = $.process.spawn({ argv: ['powershell', '-NoProfile', '-NonInteractive', '-Command', script] })
     ambientStream = stream
     for await (const _tick of stream) {
@@ -885,6 +889,12 @@ export const register: Register = (on, options) => {
       return { text: kind === 'dog' ? 'Rocky is a dog now. Woof!' : 'Rocky is a cat now. Meow.' }
     }
 
+    // a word it doesn't know explains the command rather than flipping the bar
+    if (arg !== '' && arg !== 'on' && arg !== 'off' && arg !== 'toggle') {
+      return {
+        text: 'Usage: /context-bar [on|off|toggle] · pet dog|cat · sounds on|off · nudges on|off. On its own it switches the bar off or on.',
+      }
+    }
     const was = await read($, isOn)
     const now = arg === 'on' ? true : arg === 'off' ? false : !was
     await update($, isOn, () => now)
@@ -958,13 +968,14 @@ export const register: Register = (on, options) => {
 
     // The fun column's data; it draws and animates itself.
     const sky = wx ? skyStyle(wx.code, wx.isDay) : null
+    // an effort set from the card or typed wins, while the same model is in use
+    const shownEffort = chosenEffort && chosenEffort.model === s.model ? chosenEffort.level : s.effort
     const fun: FunProps = {
       showTagline: funWidth >= 26,
       layout: columns >= MIN_COLUMNS_FOR_SIDE ? 'side' : 'stack',
       pet: await read($, pet),
       model: s.model,
-      // an effort set from the card or typed wins, while the same model is in use
-      effort: chosenEffort && chosenEffort.model === s.model ? chosenEffort.level : s.effort,
+      effort: shownEffort,
       session: sessionLength(now, s.startedAt),
       weather:
         wx && sky
@@ -1034,7 +1045,7 @@ export const register: Register = (on, options) => {
       </Text>
     )
 
-    const effortLevel = EFFORTS.indexOf(s.effort ?? '') + 1
+    const effortLevel = EFFORTS.indexOf(shownEffort ?? '') + 1
     const spinFrame = Math.floor(now / SPINNER_MS)
     const shownAgents = live.slice(0, 4)
 
@@ -1069,11 +1080,11 @@ export const register: Register = (on, options) => {
       <Text {...bg} wrap="truncate-end">
         {t(BLUE, '◆ ')}
         {t(TEXT, s.model || 'Claude', { bold: true })}
-        {s.effort && (
+        {shownEffort && (
           <Text {...bg}>
             {t(MUTED, '  effort ')}
             {meter(effortLevel / EFFORTS.length, MAUVE, EFFORTS.length)}
-            {t(TEXT, ` ${s.effort}`)}
+            {t(TEXT, ` ${shownEffort}`)}
           </Text>
         )}
       </Text>

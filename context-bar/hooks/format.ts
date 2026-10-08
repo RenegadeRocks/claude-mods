@@ -28,15 +28,17 @@ export function colorFor(row: ContextRow): string {
 
 /** 812, 8.0k, 84k, 1.2M. */
 export function compact(tokens: number): string {
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`
-  if (tokens >= 1000) return `${(tokens / 1000).toFixed(tokens >= 10_000 ? 0 : 1)}k`
+  // thresholds sit where rounding would carry: 999.5k shows as 1.0M, 9,950 as 10k
+  if (tokens >= 999_500) return `${(tokens / 1_000_000).toFixed(1)}M`
+  if (tokens >= 9_950) return `${Math.round(tokens / 1000)}k`
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}k`
   return `${tokens}`
 }
 
 /** $0.10, <$0.01, $123. */
 export function money(usd: number): string {
   if (usd > 0 && usd < 0.01) return '<$0.01'
-  return `$${usd < 100 ? usd.toFixed(2) : usd.toFixed(0)}`
+  return `$${usd < 99.995 ? usd.toFixed(2) : usd.toFixed(0)}`
 }
 
 /** '2h 14m' since `startedAt`; hours always shown, as a session is measured in them. */
@@ -50,6 +52,7 @@ export function resetsIn(now: number, resetsAt: string | undefined): string {
   const ms = resetsAt ? Date.parse(resetsAt) - now : Number.NaN
   if (!Number.isFinite(ms) || ms <= 0) return ''
   const mins = Math.round(ms / 60_000)
+  if (mins < 1) return '<1m'
   if (mins >= 1440) return `${Math.floor(mins / 1440)}d ${Math.floor((mins % 1440) / 60)}h`
   return mins >= 60 ? `${Math.floor(mins / 60)}h ${mins % 60}m` : `${mins}m`
 }
@@ -86,20 +89,25 @@ export function allocate(rows: ContextRow[], max: number, cells: number): number
       out[i] = 1
     }
   })
-  // past a full window the rows add up to more than the bar: trim the widest
-  while (out.reduce((a, b) => a + b, 0) > cells) {
+  // past a full window the rows add up to more than the bar: trim the widest,
+  // a whole bar's worth at most so a wild reading can't spin here
+  for (let guard = 0; out.reduce((a, b) => a + b, 0) > cells && guard < cells * 4; guard++) {
     const widest = out.indexOf(Math.max(...out))
     out[widest] = (out[widest] ?? 1) - 1
   }
   return out
 }
 
-/** 'claude-sonnet-5-5' or 'Sonnet 5.5' -> 'Sonnet 5.5'. */
+/** 'claude-sonnet-5-5', 'Sonnet 5.5' or the older 'claude-3-5-sonnet-20241022' -> 'Sonnet 5.5' / 'Sonnet 3.5'. */
 export function prettyModel(raw: string): string {
-  const m = /(opus|sonnet|haiku|fable)[-\s]?(\d+)(?:[-.](\d))?/i.exec(raw)
-  if (!m) return raw.replace(/^claude-/i, '')
-  const name = (m[1] ?? '').charAt(0).toUpperCase() + (m[1] ?? '').slice(1).toLowerCase()
-  return m[3] ? `${name} ${m[2]}.${m[3]}` : `${name} ${m[2]}`
+  // the version after the name, never the start of a date such as 20241022
+  const after = /(opus|sonnet|haiku|fable)[-\s]?(\d{1,2})(?!\d)(?:[-.](\d)(?!\d))?/i.exec(raw)
+  // older ids put the version first
+  const before = /(\d)(?:[-.](\d))?[-.](opus|sonnet|haiku)/i.exec(raw)
+  const [word, major, minor] = after ? [after[1], after[2], after[3]] : before ? [before[3], before[1], before[2]] : []
+  if (!word || !major) return raw.replace(/^claude-/i, '')
+  const name = word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+  return minor ? `${name} ${major}.${minor}` : `${name} ${major}`
 }
 
 // First-party API rates in dollars per million tokens: input, output,

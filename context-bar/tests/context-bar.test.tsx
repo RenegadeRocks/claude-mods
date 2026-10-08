@@ -1,5 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { etaText, minutesToFull } from '../hooks/coach'
+import { compact, money, prettyModel, resetsIn } from '../hooks/format'
+
 const cat = (name: string, tokens: number, kind: 'used' | 'free' | 'buffer') => ({
   name,
   tokens,
@@ -831,6 +834,38 @@ test("the notebook holds this project's goal, typed in place", async ($, on) => 
   const back = await mountBand($, { ...props, bodyColumns: 190 })
   expect((await deskTexts(back)).some(t => /✎ fix the fairy feet/.test(t))).toBe(true)
   await back.unmount()
+})
+
+test('the note takes a pasted word, erases an emoji whole, and keeps wide text inside the desk', async ($, on) => {
+  const clock = world(on)
+  await started($, clock)
+  const ui = await mountBand($, { ...props, bodyColumns: 190 })
+  await ui.pointer({ type: 'down', x: 10, y: NOTE, button: 'left', in: 'desk' })
+
+  // a pasted lowercase word is text; a named key types nothing
+  for (const key of ['refactor', 'f5', 'pagedown', ' 🎨🎬', 'backspace']) await ui.key({ key, in: 'desk' })
+  expect((await deskTexts(ui)).some(t => /✎ refactor 🎨▏/.test(t))).toBe(true)
+
+  // wide characters count two cells each: the note row stays the desk's width
+  for (const key of [' 漢字テスト漢字テスト漢字テスト漢字テスト']) await ui.key({ key, in: 'desk' })
+  await ui.key({ key: 'return', in: 'desk' })
+  await clock.settle()
+  const cells = (text: string) => [...text].reduce((n, ch) => n + (/[　-鿿\u{1F300}-\u{1FAFF}]/u.test(ch) ? 2 : 1), 0)
+  const noteText = (await deskTexts(ui)).find(t => t.startsWith(' ✎ refactor'))
+  expect(noteText).toBeDefined()
+  expect(cells(noteText ?? '')).toBe(42)
+  await ui.unmount()
+})
+
+test('numbers round cleanly at their edges', async () => {
+  expect(compact(999_500)).toBe('1.0M')
+  expect(compact(9_999)).toBe('10k')
+  expect(compact(9_949)).toBe('9.9k')
+  expect(money(99.995)).toBe('$100')
+  expect(resetsIn(0, new Date(20_000).toISOString())).toBe('<1m')
+  expect(prettyModel('claude-3-5-sonnet-20241022')).toBe('Sonnet 3.5')
+  expect(prettyModel('claude-opus-5-5')).toBe('Opus 5.5')
+  expect(etaText(minutesToFull([[0, 90], [600_000, 100]], 600_000, { percent: 100 }) ?? 1)).toBe('full: waits for the reset')
 })
 
 test('the focus timer runs 25 minutes, rings, then a 5-minute break', async ($, on) => {

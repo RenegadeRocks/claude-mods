@@ -262,7 +262,7 @@ function clockCell(cx: number, cy: number, now: Date, wall: string): DeskCell | 
 
 /** The scene's cells, top to bottom: six rows of wall, one of desk top. */
 export function paintScene(frame: number, now: Date, ambient: Ambient, isLampOn: boolean, sky = 0): DeskCell[][] {
-  const px = paintPixels(frame, ambient, isLampOn, sky)
+  const px = paintPixels(frame, ambient, isLampOn, Number.isFinite(sky) ? Math.min(1.3, Math.max(0, sky)) : 0)
   const rows: DeskCell[][] = []
   for (let cy = 0; cy < SCENE_ROWS; cy++) {
     const row: DeskCell[] = []

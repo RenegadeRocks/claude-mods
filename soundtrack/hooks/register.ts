@@ -84,6 +84,10 @@ export const register: Register = (on, options) => {
       isOn = wasOn
       return { text: 'That was: start, tool, done, oops.' }
     }
+    // a word it doesn't know explains the command rather than flipping the sound
+    if (arg !== '' && arg !== 'on' && arg !== 'off' && arg !== 'toggle') {
+      return { text: `Soundtrack is ${isOn ? 'on' : 'off'}. Usage: /soundtrack [on|off|test]; on its own it switches.` }
+    }
     isOn = arg === 'on' ? true : arg === 'off' ? false : !isOn
     await $.store.set('isOn', isOn)
     return { text: isOn ? 'Soundtrack on.' : 'Soundtrack off, in every session until /soundtrack on.' }

@@ -43,15 +43,52 @@ type Local = {
   isLampOn: boolean
 }
 
+// keys that arrive by name rather than as the character they type
+const NAMED_KEYS = new Set([
+  'up', 'down', 'left', 'right', 'tab', 'delete', 'insert', 'pageup', 'pagedown',
+  'home', 'end', 'escape', 'return', 'backspace', 'clear', 'capslock',
+])
+
 /**
  * What a key types into the note: a character, a space, or a pasted run of
  * text; null for a named key such as 'pagedown' or 'f5'.
  */
 function typedText(key: string): string | null {
   if (key === 'space') return ' '
-  if ([...key].length === 1) return key
-  // a lowercase word is a key's name; a paste has spaces, capitals or punctuation
-  return /^[a-z0-9]+$/.test(key) ? null : key.replace(/[\r\n\t]+/g, ' ')
+  if (NAMED_KEYS.has(key) || /^f\d{1,2}$/.test(key)) return null
+  return key.replace(/[\r\n\t]+/g, ' ')
+}
+
+/** How many terminal cells a character takes: two for wide East Asian scripts and emoji. */
+function cellsOf(ch: string): number {
+  const code = ch.codePointAt(0) ?? 0
+  const isWide =
+    (code >= 0x1100 && code <= 0x115f) ||
+    (code >= 0x2e80 && code <= 0xa4cf) ||
+    (code >= 0xac00 && code <= 0xd7a3) ||
+    (code >= 0xf900 && code <= 0xfaff) ||
+    (code >= 0xfe30 && code <= 0xfe4f) ||
+    (code >= 0xff00 && code <= 0xff60) ||
+    (code >= 0xffe0 && code <= 0xffe6) ||
+    (code >= 0x1f300 && code <= 0x1faff) ||
+    (code >= 0x20000 && code <= 0x3fffd)
+  return isWide ? 2 : 1
+}
+
+/** As much of the text as fits in `width` cells, from its start or (`fromEnd`) its end, and the cells it takes. */
+function fitCells(text: string, width: number, fromEnd = false): { text: string; cells: number } {
+  const chars = [...text]
+  if (fromEnd) chars.reverse()
+  let used = 0
+  const kept: string[] = []
+  for (const ch of chars) {
+    const w = cellsOf(ch)
+    if (used + w > width) break
+    kept.push(ch)
+    used += w
+  }
+  if (fromEnd) kept.reverse()
+  return { text: kept.join(''), cells: used }
 }
 
 function clockText(ms: number): string {
@@ -102,10 +139,13 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
     const s = surface.state
     if (!s?.isEditing || e.ctrl || e.meta) return
     if (e.key === 'return') saveGoal(s)
-    else if (e.key === 'backspace') surface.setState({ ...s, draft: s.draft.slice(0, -1), typedAt: s.frame })
+    // by characters, not UTF-16 units, so an emoji is erased whole
+    else if (e.key === 'backspace') surface.setState({ ...s, draft: [...s.draft].slice(0, -1).join(''), typedAt: s.frame })
     else {
       const typed = typedText(e.key)
-      if (typed !== null) surface.setState({ ...s, draft: (s.draft + typed).slice(0, MAX_GOAL), typedAt: s.frame })
+      if (typed !== null) {
+        surface.setState({ ...s, draft: [...(s.draft + typed)].slice(0, MAX_GOAL).join(''), typedAt: s.frame })
+      }
     }
   })
 
@@ -125,11 +165,14 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
   const drawer = ` ${timer}`.padEnd(SOUND_START).slice(0, SOUND_START) + sound.padStart(DESK_WIDTH - SOUND_START - 1) + ' '
 
   const goal = props.goal.trim()
-  // while typing, the end of the draft stays in view, with a blinking caret
+  // while typing, the end of the draft stays in view, with a blinking caret;
+  // widths count terminal cells, so wide characters can't push the row out
   const room = NOTE_WIDTH - 3 - 1 - SAVE_HINT.length
   const caret = local.frame % 4 < 2 ? '▏' : ' '
-  const typing = ` ✎ ${local.draft.slice(-room)}${caret}`.padEnd(NOTE_WIDTH - SAVE_HINT.length)
-  const note = ` ✎ ${goal || "click to write today's goal"}`.padEnd(NOTE_WIDTH).slice(0, NOTE_WIDTH)
+  const tail = fitCells(local.draft, room, true)
+  const typing = ` ✎ ${tail.text}${caret}${' '.repeat(room - tail.cells)}`
+  const head = fitCells(` ✎ ${goal || "click to write today's goal"}`, NOTE_WIDTH)
+  const note = head.text + ' '.repeat(NOTE_WIDTH - head.cells)
 
   return (
     <Box flexDirection="column" backgroundColor={WOOD}>
