@@ -19,6 +19,7 @@ const SOUND_START = DESK_WIDTH - 16
 const NOTE_WIDTH = DESK_WIDTH - 2
 const MAX_GOAL = 120
 const SAVE_HINT = ' enter saves '
+const PENCIL = ' ✎  '
 // an open note with no typing for this many frames (30 s) saves itself: Escape
 // hands the keyboard back without telling the desk
 const IDLE_SAVE_FRAMES = 120
@@ -167,11 +168,12 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
   const goal = props.goal.trim()
   // while typing, the end of the draft stays in view, with a blinking caret;
   // widths count terminal cells, so wide characters can't push the row out
-  const room = NOTE_WIDTH - 3 - 1 - SAVE_HINT.length
+  // the pencil draws two cells wide in some terminals, so two spaces follow it
+  const room = NOTE_WIDTH - PENCIL.length - 1 - SAVE_HINT.length
   const caret = local.frame % 4 < 2 ? '▏' : ' '
   const tail = fitCells(local.draft, room, true)
-  const typing = ` ✎ ${tail.text}${caret}${' '.repeat(room - tail.cells)}`
-  const head = fitCells(` ✎ ${goal || "click to write today's goal"}`, NOTE_WIDTH)
+  const typing = `${PENCIL}${tail.text}${caret}${' '.repeat(room - tail.cells)}`
+  const head = fitCells(`${PENCIL}${goal || "click to write today's goal"}`, NOTE_WIDTH)
   const note = head.text + ' '.repeat(NOTE_WIDTH - head.cells)
 
   return (

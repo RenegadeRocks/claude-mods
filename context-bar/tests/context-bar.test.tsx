@@ -823,16 +823,16 @@ test("the notebook holds this project's goal, typed in place", async ($, on) => 
   await ui.pointer({ type: 'down', x: 10, y: NOTE, button: 'left', in: 'desk' })
   expect((await deskTexts(ui)).some(t => /enter saves/.test(t))).toBe(true)
   for (const key of ['f', 'i', 'x', ' ', 'the fairy feet', 'z', 'backspace']) await ui.key({ key, in: 'desk' })
-  expect((await deskTexts(ui)).some(t => /✎ fix the fairy feet▏/.test(t))).toBe(true)
+  expect((await deskTexts(ui)).some(t => /✎ +fix the fairy feet▏/.test(t))).toBe(true)
   await ui.key({ key: 'return', in: 'desk' })
   await clock.settle()
-  expect((await deskTexts(ui)).some(t => /✎ fix the fairy feet/.test(t))).toBe(true)
+  expect((await deskTexts(ui)).some(t => /✎ +fix the fairy feet/.test(t))).toBe(true)
   await ui.unmount()
 
   // a new session in the same project opens the notebook where it was left
   await started($, clock)
   const back = await mountBand($, { ...props, bodyColumns: 190 })
-  expect((await deskTexts(back)).some(t => /✎ fix the fairy feet/.test(t))).toBe(true)
+  expect((await deskTexts(back)).some(t => /✎ +fix the fairy feet/.test(t))).toBe(true)
   await back.unmount()
 })
 
@@ -844,14 +844,14 @@ test('the note takes a pasted word, erases an emoji whole, and keeps wide text i
 
   // a pasted lowercase word is text; a named key types nothing
   for (const key of ['refactor', 'f5', 'pagedown', ' 🎨🎬', 'backspace']) await ui.key({ key, in: 'desk' })
-  expect((await deskTexts(ui)).some(t => /✎ refactor 🎨▏/.test(t))).toBe(true)
+  expect((await deskTexts(ui)).some(t => /✎ +refactor 🎨▏/.test(t))).toBe(true)
 
   // wide characters count two cells each: the note row stays the desk's width
   for (const key of [' 漢字テスト漢字テスト漢字テスト漢字テスト']) await ui.key({ key, in: 'desk' })
   await ui.key({ key: 'return', in: 'desk' })
   await clock.settle()
   const cells = (text: string) => [...text].reduce((n, ch) => n + (/[　-鿿\u{1F300}-\u{1FAFF}]/u.test(ch) ? 2 : 1), 0)
-  const noteText = (await deskTexts(ui)).find(t => t.startsWith(' ✎ refactor'))
+  const noteText = (await deskTexts(ui)).find(t => /^ ✎ +refactor/.test(t))
   expect(noteText).toBeDefined()
   expect(cells(noteText ?? '')).toBe(42)
   await ui.unmount()
