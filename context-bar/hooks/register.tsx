@@ -79,6 +79,29 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 const SPINNER_MS = 280
 const MINUTE_TICK_MS = 10_000
 const WEATHER_REFRESH_MS = 15 * 60_000
+// One-click prompts for what Satbir asks for most: [key, label, prompt].
+const ACTIONS: [key: string, label: string, prompt: string][] = [
+  [
+    'recap',
+    'Recap',
+    "Recap for me in a few short lines: what are we working on, what's done, what's in progress, " +
+      "what's next, and is anything blocked or broken? Plain words, no code.",
+  ],
+  [
+    'memory',
+    'Update memory',
+    'Update memory: save what future sessions should know from this one: decisions made, ' +
+      'where the work stands, and the next step. Keep each note short.',
+  ],
+  ['keep-going', 'Keep going', 'Keep going where you left off.'],
+  [
+    'team',
+    'Team update',
+    'Write a short status update about this work that I can paste to my team: what changed, ' +
+      "what's next, and anything they need to do. Plain words, 3 to 5 lines.",
+  ],
+]
+
 const SPINNER = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
 
 const AGENT_NAMES = [
@@ -227,6 +250,24 @@ async function coachClock($: EngineInterface) {
 }
 
 /** The Continue button: clears the reset note and asks Claude to carry on. */
+/** An action button: its prompt goes in as if typed, queued while a turn runs. */
+async function sendPrompt($: EngineInterface, text: string) {
+  try {
+    await $.prompt.submit({ text } as never)
+  } catch {
+    // a missed press is fine; the prompt can still be typed
+  }
+}
+
+/** The Compact button: the same as typing /compact. */
+async function compactNow($: EngineInterface) {
+  try {
+    await $.command.run({ command: 'compact' } as never)
+  } catch {
+    // compaction can wait for the next press
+  }
+}
+
 async function continueWork($: EngineInterface) {
   try {
     await update($, coach, c => ({ ...c, isReset: false }))
@@ -707,6 +748,17 @@ export const register: Register = (on, options) => {
           )}
           {/* the model sits under the weather in the fun column; with no fun column, here */}
           {!showFun && modelLine}
+          <Box {...bg} flexDirection="row" flexWrap="wrap" alignItems="center">
+            {label('ASK')}
+            {ACTIONS.map(([key, name, prompt]) => (
+              <Box key={key} {...bg} marginRight={1}>
+                <Button key={key} label={name} onPress={() => void sendPrompt($, prompt)} />
+              </Box>
+            ))}
+            <Box key="compact" {...bg} marginRight={1}>
+              <Button key="compact" label={`Compact${s.percent >= 60 ? ` · ${s.percent}%` : ''}`} onPress={() => void compactNow($)} />
+            </Box>
+          </Box>
           {shownAgents.length > 0 && (
             <Text {...bg} wrap="truncate-end">
               {label('AGENTS')}

@@ -15,6 +15,7 @@ let lastReply: unknown = null
 let fiveHour: { percentUsed: number; resetsAt: string } = { percentUsed: 37, resetsAt: '2026-10-07T14:10:00Z' }
 const toasts: string[] = []
 const submitted: string[] = []
+const commands: string[] = []
 
 const usage = {
   startedAt: NOON_UTC - (2 * 60 + 14) * 60_000,
@@ -69,6 +70,7 @@ function world(on: On, options: { agents?: unknown[]; store?: Record<string, unk
   fiveHour = { percentUsed: 37, resetsAt: '2026-10-07T14:10:00Z' }
   toasts.length = 0
   submitted.length = 0
+  commands.length = 0
   const clock = mock.clock(on, { now: NOON_UTC })
   mock.store(on, options.store ?? {})
   on('session.usage', () => ({ value: usage }) as never)
@@ -88,6 +90,11 @@ function world(on: On, options: { agents?: unknown[]; store?: Record<string, unk
   on('prompt.submit', (_, e) => {
     submitted.push(e.text)
     return { text: e.text } as never
+  })
+  // commands the mod runs itself, like /compact; its own /context-bar it answers above this
+  on('command.run', (_, e) => {
+    commands.push(`/${e.command}${e.args ? ` ${e.args}` : ''}`)
+    return { text: '' } as never
   })
   on('ui.toast', (_, e) => {
     toasts.push(e.text)
@@ -245,7 +252,7 @@ test('the pet is no Button, so the pointer never lights it up', async ($, on) =>
   await started($, clock)
   const ui = await mountBand($)
 
-  expect(await ui.findAll({ type: 'Button' })).toEqual([])
+  // the card's ASK row has Buttons; the pet's column has none
   expect(await ui.findAll({ type: 'Button', in: 'fun' })).toEqual([])
   // hovering only swaps the nameplate for a hint
   await ui.pointer({ type: 'move', x: 10, y: PET_ROW + 1 })
@@ -579,4 +586,34 @@ test('a wide window puts the pet beside its info rows and the context on one row
   const texts = await textsOf(ui)
   expect(texts.some(t => /^CONTEXT {2}42% {2}█+.*░+ {2}84k \/ 200k$/.test(t))).toBe(true)
   await ui.unmount()
+})
+
+test('the ASK buttons send their prompts, and Compact runs /compact', async ($, on) => {
+  const clock = world(on)
+  await started($, clock)
+  const ui = await mountBand($)
+
+  for (const key of ['recap', 'memory', 'keep-going', 'team']) {
+    expect(await ui.find({ type: 'Button', key })).toBeDefined()
+    await ui.press({ key })
+  }
+  await clock.settle()
+  expect(submitted).toHaveLength(4)
+  expect(submitted[0]).toMatch(/^Recap for me/)
+  expect(submitted[1]).toMatch(/^Update memory:/)
+  expect(submitted[2]).toBe('Keep going where you left off.')
+  expect(submitted[3]).toMatch(/status update .* paste to my team/)
+
+  // Compact is always there; past 60% it also shows how full the context is
+  expect((await ui.find({ type: 'Button', key: 'compact' }))?.text).toBe('Compact')
+  await ui.press({ key: 'compact' })
+  await clock.settle()
+  expect(commands).toContain('/compact')
+  await ui.unmount()
+
+  contextPercent = 74
+  await started($, clock)
+  const full = await mountBand($)
+  expect((await full.find({ type: 'Button', key: 'compact' }))?.text).toBe('Compact · 74%')
+  await full.unmount()
 })
