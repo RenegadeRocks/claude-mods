@@ -588,7 +588,7 @@ test('a wide window puts the pet beside its info rows and the context on one row
   await ui.unmount()
 })
 
-test('the ASK buttons send their prompts, and Compact runs /compact', async ($, on) => {
+test('the ASK buttons send their prompts; Compact appears past 60% and runs /compact', async ($, on) => {
   const clock = world(on)
   await started($, clock)
   const ui = await mountBand($)
@@ -604,16 +604,17 @@ test('the ASK buttons send their prompts, and Compact runs /compact', async ($, 
   expect(submitted[2]).toBe('Keep going where you left off.')
   expect(submitted[3]).toMatch(/status update .* paste to my team/)
 
-  // Compact is always there; past 60% it also shows how full the context is
-  expect((await ui.find({ type: 'Button', key: 'compact' }))?.text).toBe('Compact')
-  await ui.press({ key: 'compact' })
-  await clock.settle()
-  expect(commands).toContain('/compact')
+  // at 42% there is no Compact button yet
+  expect(await ui.find({ type: 'Button', key: 'compact' })).toBeUndefined()
   await ui.unmount()
 
+  // past 60% it appears, with how full the context is, and runs /compact
   contextPercent = 74
   await started($, clock)
   const full = await mountBand($)
   expect((await full.find({ type: 'Button', key: 'compact' }))?.text).toBe('Compact · 74%')
+  await full.press({ key: 'compact' })
+  await clock.settle()
+  expect(commands).toContain('/compact')
   await full.unmount()
 })

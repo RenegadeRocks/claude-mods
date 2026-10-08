@@ -8,7 +8,7 @@ A Claude Code mod that puts a card above your prompt.
 
 **Limit Coach:** watches how fast your 5-hour window fills. If you'll run out before it resets, the 5H row says when ("⚠ full in ~25m") and a note at 80% and 95% suggests a lower `/effort` or a lighter model. When a full window resets, a **Continue** button on the card picks the work back up.
 
-**Buttons:** one click sends a prompt you'd otherwise type: **Recap** (what are we doing, what's done, what's next), **Update memory**, **Keep going**, and **Team update** (a short status to paste to your team). **Compact** runs `/compact`, and shows how full the context is once it passes 60%.
+**Buttons:** one click sends a prompt you'd otherwise type: **Recap** (what are we doing, what's done, what's next), **Update memory**, **Keep going**, and **Team update** (a short status to paste to your team). **Compact** appears once the context passes 60% and runs `/compact`.
 
 ## Install
 

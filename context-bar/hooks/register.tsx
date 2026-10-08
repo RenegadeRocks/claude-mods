@@ -79,6 +79,9 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 const SPINNER_MS = 280
 const MINUTE_TICK_MS = 10_000
 const WEATHER_REFRESH_MS = 15 * 60_000
+// the Compact button shows from this context share
+const COMPACT_FROM = 60
+
 // One-click prompts for what Satbir asks for most: [key, label, prompt].
 const ACTIONS: [key: string, label: string, prompt: string][] = [
   [
@@ -755,9 +758,12 @@ export const register: Register = (on, options) => {
                 <Button key={key} label={name} onPress={() => void sendPrompt($, prompt)} />
               </Box>
             ))}
-            <Box key="compact" {...bg} marginRight={1}>
-              <Button key="compact" label={`Compact${s.percent >= 60 ? ` · ${s.percent}%` : ''}`} onPress={() => void compactNow($)} />
-            </Box>
+            {/* compaction only earns its button once the context is getting full */}
+            {s.percent >= COMPACT_FROM && (
+              <Box key="compact" {...bg} marginRight={1}>
+                <Button key="compact" label={`Compact · ${s.percent}%`} onPress={() => void compactNow($)} />
+              </Box>
+            )}
           </Box>
           {shownAgents.length > 0 && (
             <Text {...bg} wrap="truncate-end">
