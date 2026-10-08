@@ -6,7 +6,7 @@ export const BORDER = '#3b4261'
 export const TEXT = '#cdd6f4'
 export const MUTED = '#8087a2'
 export const TRACK = '#444b6a'
-export const FREE = '#2a2e45'
+export const FREE = '#353b58'
 export const BUFFER = '#6c4a5a'
 
 export const BLUE = '#89b4fa'

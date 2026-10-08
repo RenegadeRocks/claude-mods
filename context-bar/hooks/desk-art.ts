@@ -21,7 +21,7 @@ const CLOCK = { x0: 15, x1: 23, top: 0, bottom: 2 }
 const CLOCK_FRAME = '#ffa04a'
 const CLOCK_FACE = '#1f0f0a'
 const CLOCK_DIGITS = '#ffc472'
-const CLOCK_COLON_DIM = '#7a3d18'
+const CLOCK_COLON_DIM = '#b8662a'
 const CLOCK_GLOW = '#ff7a1a'
 // the lamp's bulb, in pixels; its warm light falls around it
 const BULB = { x: 36, y: 6 }

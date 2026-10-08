@@ -988,8 +988,10 @@ export const register: Register = (on, options) => {
     // one row when there is room: the label and share, the bar, the token counts
     const contextHead = `CONTEXT  ${s.percent}%  `
     const contextTail = `  ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`
-    const isOneContextRow = dataWidth >= MIN_DATA_FOR_ONE_CONTEXT_ROW
-    const barWidth = isOneContextRow ? dataWidth - contextHead.length - contextTail.length : dataWidth
+    // beside the desk the bar ends where the desk begins, its totals right after it
+    const contextWidth = showDesk ? rowsWidth : dataWidth
+    const isOneContextRow = contextWidth >= MIN_DATA_FOR_ONE_CONTEXT_ROW
+    const barWidth = isOneContextRow ? contextWidth - contextHead.length - contextTail.length : contextWidth
     const cells = allocate(bar, s.maxTokens, Math.min(MAX_CELLS, Math.max(MIN_CELLS, barWidth)))
 
     // Cache: the share of the input reused from the prompt cache, which is
@@ -1093,28 +1095,28 @@ export const register: Register = (on, options) => {
           </Box>
         )}
         <Box {...bg} flexDirection="column" flexGrow={1}>
-          {isOneContextRow ? (
-            <Text {...bg} wrap="truncate-end">
-              {t(MUTED, 'CONTEXT  ')}
-              {t(mood, `${s.percent}%`, { bold: true })}
-              {t(MUTED, '  ')}
-              {barCells}
-              {t(MUTED, contextTail)}
-            </Text>
-          ) : (
-            [
-              <Text key="head" {...bg} wrap="truncate-end">
-                {t(MUTED, 'CONTEXT  ')}
-                {t(mood, `${s.percent}%`, { bold: true })}
-                {t(MUTED, `   ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`)}
-              </Text>,
-              <Text key="bar" {...bg}>
-                {barCells}
-              </Text>,
-            ]
-          )}
           <Box {...bg} flexDirection="row">
             <Box {...bg} flexDirection="column" flexGrow={1}>
+              {isOneContextRow ? (
+                <Text {...bg} wrap="truncate-end">
+                  {t(MUTED, 'CONTEXT  ')}
+                  {t(mood, `${s.percent}%`, { bold: true })}
+                  {t(MUTED, '  ')}
+                  {barCells}
+                  {t(MUTED, contextTail)}
+                </Text>
+              ) : (
+                [
+                  <Text key="head" {...bg} wrap="truncate-end">
+                    {t(MUTED, 'CONTEXT  ')}
+                    {t(mood, `${s.percent}%`, { bold: true })}
+                    {t(MUTED, `   ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`)}
+                  </Text>,
+                  <Text key="bar" {...bg}>
+                    {barCells}
+                  </Text>,
+                ]
+              )}
               <Text {...bg} wrap="truncate-end">
                 {used.map((r, i) => (
                   <Text key={`l${i}`} {...bg}>
