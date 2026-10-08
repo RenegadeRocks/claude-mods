@@ -5,8 +5,18 @@
   "plugins": [
     {
       "name": "context-bar",
-      "source": "./",
-      "description": "A card above the Claude Code prompt: context, limits, cache and API cost, model and effort, a quote, and an animated pet that grows with your context."
+      "source": "./context-bar",
+      "description": "A card above the Claude Code prompt: context, limits with a Limit Coach, cache and API cost, model and effort, a quote, and an animated cat or dog that grows with your context."
+    },
+    {
+      "name": "soundtrack",
+      "source": "./soundtrack",
+      "description": "Soft sounds for what Claude is doing: a rising chord when it starts, a quiet tick while tools run, a chime when it's done."
+    },
+    {
+      "name": "project-colors",
+      "source": "./project-colors",
+      "description": "Every project gets its own prompt-bar colour and session name, learned from your own /color and /rename."
     }
   ]
 }

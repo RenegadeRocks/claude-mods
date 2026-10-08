@@ -1,0 +1,6 @@
+{
+  "name": "project-colors",
+  "version": "0.1.0",
+  "description": "Every project gets its own prompt-bar colour and session name, set when a session starts. It learns from your own /color and /rename.",
+  "author": { "name": "RenegadeRocks" }
+}

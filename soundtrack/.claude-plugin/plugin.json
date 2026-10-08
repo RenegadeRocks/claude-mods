@@ -1,0 +1,14 @@
+{
+  "name": "soundtrack",
+  "version": "0.1.0",
+  "description": "A soft soundtrack for Claude Code: a rising chord when Claude starts, a quiet tick while tools run, a chime when it's done.",
+  "author": { "name": "RenegadeRocks" },
+  "userConfig": {
+    "toolTicks": {
+      "type": "boolean",
+      "title": "Tick while tools run",
+      "description": "A quiet tick when Claude runs a tool, at most one every 3 seconds.",
+      "default": true
+    }
+  }
+}
