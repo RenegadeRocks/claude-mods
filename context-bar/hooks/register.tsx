@@ -5,7 +5,22 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentChip, ContextSnap, FunMessage, FunProps, Limit, Output, Phase, Spend, Weather } from '../types'
+import type {
+  AgentChip,
+  Ambient,
+  ContextSnap,
+  DeskMessage,
+  DeskProps,
+  FunMessage,
+  FunProps,
+  Limit,
+  Output,
+  Phase,
+  Pomodoro,
+  Spend,
+  Weather,
+} from '../types'
+import { DESK_WIDTH } from './desk-art'
 import { NO_COACH, coachStep, coachTick, etaText, minutesToFull } from './coach'
 import { NO_TRACK, gpuStep, parseSmi } from './gpu'
 import { NO_WELLNESS, NUDGE_TOASTS, wellnessDone, wellnessTick } from './wellness'
@@ -65,6 +80,10 @@ const celebrate = atom({ plugin: 'context-bar', key: 'celebrate' } as const, nul
 const wellness = atom({ plugin: 'context-bar', key: 'wellness' } as const, NO_WELLNESS)
 const output = atom({ plugin: 'context-bar', key: 'output' } as const, null)
 const effortChoice = atom({ plugin: 'context-bar', key: 'effortChoice' } as const, null)
+const IDLE_POMODORO: Pomodoro = { phase: 'idle', endsAt: null, rounds: 0 }
+const goal = atom({ plugin: 'context-bar', key: 'goal' } as const, '')
+const pomodoro = atom({ plugin: 'context-bar', key: 'pomodoro' } as const, IDLE_POMODORO)
+const ambient = atom({ plugin: 'context-bar', key: 'ambient' } as const, 'off')
 
 // Layout, in terminal columns.
 const COLUMN_GAP = 3
@@ -74,6 +93,9 @@ const MIN_COLUMNS_FOR_FUN = 48
 const MIN_COLUMNS_FOR_SIDE = 140
 // the context label and numbers share the bar's row from this data width
 const MIN_DATA_FOR_ONE_CONTEXT_ROW = 60
+// the desk sits beside the rows under the context bar from this data width
+const MIN_DATA_FOR_DESK = 118
+const DESK_GAP = 2
 // the two limits share a row from this data width, and stack below it
 const MIN_DATA_FOR_ONE_LIMIT_ROW = 56
 const MIN_CELLS = 12
@@ -88,6 +110,10 @@ const MINUTE_TICK_MS = 10_000
 const GPU_POLL_MS = 5000
 // an alert the pet is giving chimes again this often until it is clicked
 const REMIND_MS = 5 * 60_000
+// the desk's focus timer, and the order its sound button steps through
+const FOCUS_MS = 25 * 60_000
+const BREAK_MS = 5 * 60_000
+const AMBIENTS: Ambient[] = ['off', 'rain', 'fire', 'focus']
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 // newest-output search: these kinds of file, this deep, skipping these folders
 const MEDIA = /\.(png|jpe?g|webp|gif|mp4|mov|webm|mkv|avi)$/i
@@ -160,6 +186,9 @@ let lastActivity = 0
 let isWindows: boolean | null = null
 // when the pet last chimed for an alert still waiting for a click
 let lastChime = 0
+// the ambient loop playing now: a stop for macOS, a pid file on Windows
+let stopMacAmbient: AbortController | null = null
+let ambientPidFile: string | null = null
 const agentNames = new Map<string, string>()
 
 /** A fun name per subagent, kept for as long as the session lives. */
@@ -345,7 +374,7 @@ async function wellnessClock($: EngineInterface, eyesMs: number, waterMs: number
  * Plays one of the pet's clips without holding anything up. The engine's own
  * player only sounds on macOS, so on Windows PowerShell plays the file.
  */
-async function playSound($: EngineInterface, clip: 'nudge' | 'cheer') {
+async function playSound($: EngineInterface, clip: 'nudge' | 'cheer' | 'bell') {
   try {
     if ((await $.store.get('sounds')) === false) return
     isWindows ??= (await $.env.get('OS')) === 'Windows_NT'
@@ -445,6 +474,119 @@ async function openPath($: EngineInterface, path: string, isReveal: boolean) {
     await $.process.run(argv, { timeoutMs: 10_000 })
   } catch {
     // the file may have moved
+  }
+}
+
+/** The project key the desk's goal is filed under: the session's root folder. */
+async function projectKey($: EngineInterface): Promise<string> {
+  return (await $.session.root()).replace(/[\\/]+$/, '').toLowerCase()
+}
+
+/** Reads this project's goal into the desk's notebook. */
+async function loadGoal($: EngineInterface) {
+  try {
+    const goals = ((await $.store.get('goals')) ?? {}) as Record<string, string>
+    const mine = goals[await projectKey($)] ?? ''
+    await update($, goal, () => mine)
+  } catch {
+    // an empty notebook is fine
+  }
+}
+
+/** Stops whatever ambient loop is playing. */
+async function stopAmbient($: EngineInterface) {
+  try {
+    stopMacAmbient?.abort()
+    stopMacAmbient = null
+    if (ambientPidFile) {
+      const pid = (await $.fs.read(ambientPidFile).catch(() => '')).trim()
+      ambientPidFile = null
+      if (/^\d+$/.test(pid)) {
+        await $.process.run(['powershell', '-NoProfile', '-NonInteractive', '-Command', `Stop-Process -Id ${pid} -Force`], {
+          timeoutMs: 10_000,
+        })
+      }
+    }
+  } catch {
+    // it may have ended on its own
+  }
+}
+
+/**
+ * Loops an ambient sound until stopped. On Windows a hidden PowerShell plays
+ * it and writes its process id, so it can be stopped; Claude Code ends it
+ * with the session. On macOS the engine plays it.
+ */
+async function playAmbient($: EngineInterface, kind: Ambient) {
+  await stopAmbient($)
+  if (kind === 'off') return
+  try {
+    isWindows ??= (await $.env.get('OS')) === 'Windows_NT'
+    if (!isWindows) {
+      const stop = new AbortController()
+      stopMacAmbient = stop
+      await $.audio.play({ asset: `sounds/ambient-${kind}.wav` }, { shouldLoop: true, signal: stop.signal })
+      return
+    }
+    const temp = (await $.env.get('TEMP')) ?? $.plugin.root
+    const pidFile = `${temp}\\context-bar-ambient.pid`
+    ambientPidFile = pidFile
+    const file = `${$.plugin.root}\\sounds\\ambient-${kind}.wav`.replace(/'/g, "''")
+    const script =
+      `$PID | Out-File -Encoding ascii '${pidFile.replace(/'/g, "''")}'; ` +
+      `$p = New-Object Media.SoundPlayer '${file}'; $p.PlayLooping(); Start-Sleep -Seconds 86400`
+    const stream = $.process.spawn({ argv: ['powershell', '-NoProfile', '-NonInteractive', '-Command', script] })
+    for await (const _piece of stream) {
+      // it prints nothing; the loop lasts as long as the sound
+    }
+  } catch {
+    // no sound this time
+  }
+}
+
+/** The focus timer's clock: a finished focus starts a break, a finished break rests. */
+async function pomodoroClock($: EngineInterface, now: number) {
+  try {
+    const p = await read($, pomodoro)
+    if (p.phase === 'idle' || p.endsAt === null || now < p.endsAt) return
+    if (p.phase === 'focus') {
+      const rest: Pomodoro = { phase: 'break', endsAt: now + BREAK_MS, rounds: p.rounds + 1 }
+      await update($, pomodoro, () => rest)
+      $.ui.toast('Focus round done! Take a 5-minute break.', { timeoutMs: 10_000 })
+    } else {
+      await update($, pomodoro, () => ({ ...IDLE_POMODORO, rounds: p.rounds }))
+      $.ui.toast('Break over. Click the timer on the desk for another round.', { timeoutMs: 10_000 })
+    }
+    void playSound($, 'bell')
+  } catch {
+    // check again next tick
+  }
+}
+
+/** A click or a typed goal on the desk. */
+async function deskClicked($: EngineInterface, message: DeskMessage) {
+  try {
+    if (message.type === 'goal') {
+      const text = message.text.trim().slice(0, 120)
+      await update($, goal, () => text)
+      const goals = ((await $.store.get('goals')) ?? {}) as Record<string, string>
+      await $.store.set('goals', { ...goals, [await projectKey($)]: text })
+      return
+    }
+    if (message.type === 'pomodoro') {
+      const now = await $.clock.now()
+      await update($, pomodoro, (p): Pomodoro =>
+        p.phase === 'idle' ? { phase: 'focus', endsAt: now + FOCUS_MS, rounds: p.rounds } : { ...IDLE_POMODORO, rounds: p.rounds },
+      )
+      return
+    }
+    const current = await read($, ambient)
+    const next = AMBIENTS[(AMBIENTS.indexOf(current) + 1) % AMBIENTS.length] ?? 'off'
+    await update($, ambient, () => next)
+    await $.store.set('ambient', next)
+    void playAmbient($, next)
+  } catch {
+    // a missed click is fine
   }
 }
 
@@ -585,11 +727,18 @@ export const register: Register = (on, options) => {
       void refreshAgents($)
       void coachClock($)
       void wellnessClock($, eyesMs, waterMs)
+      void $.clock.now().then(now => pomodoroClock($, now))
       $.ui.invalidate('ui.render')
     })
     $.clock.every(GPU_POLL_MS, () => void pollGpu($))
     void pollGpu($)
     void scanOutputs($)
+    void loadGoal($)
+    const sound = await $.store.get('ambient')
+    if (sound === 'rain' || sound === 'fire' || sound === 'focus') {
+      await update($, ambient, () => sound)
+      void playAmbient($, sound)
+    }
     $.clock.every(WEATHER_REFRESH_MS, () => void fetchWeather($, city, unit))
     return next(e)
   })
@@ -656,6 +805,12 @@ export const register: Register = (on, options) => {
   on('ui.message', { element: 'fun' }, async ($, e, next) => {
     const message = e.data as FunMessage | undefined
     if (message && typeof message === 'object' && 'type' in message) void funClicked($, message)
+    return next(e)
+  })
+
+  on('ui.message', { element: 'desk' }, async ($, e, next) => {
+    const message = e.data as DeskMessage | undefined
+    if (message && typeof message === 'object' && 'type' in message) void deskClicked($, message)
     return next(e)
   })
 
@@ -745,7 +900,10 @@ export const register: Register = (on, options) => {
     const showFun = columns >= MIN_COLUMNS_FOR_FUN
     const funWidth = funColumns(columns)
     const dataWidth = showFun ? inner - funWidth - COLUMN_GAP : inner
-    const meterCells = dataWidth >= 70 ? 10 : 6
+    // the desk takes the right of the rows under the context bar when it fits
+    const showDesk = dataWidth >= MIN_DATA_FOR_DESK
+    const rowsWidth = showDesk ? dataWidth - DESK_WIDTH - DESK_GAP : dataWidth
+    const meterCells = rowsWidth >= 70 ? 10 : 6
 
     const now = await $.clock.now()
     const [wx, live, shownQuote, stored, sp] = await Promise.all([
@@ -757,6 +915,12 @@ export const register: Register = (on, options) => {
     ])
     const current: Phase = e.props.isWorking ? (stored === 'idle' ? 'thinking' : stored) : 'idle'
     const mood = percentColor(s.percent)
+    const desk: DeskProps = {
+      goal: await read($, goal),
+      pomodoro: await read($, pomodoro),
+      ambient: await read($, ambient),
+      now,
+    }
     const [gpuNow, party, wellnessNow, chosenEffort, newest] = await Promise.all([
       read($, gpu),
       read($, celebrate),
@@ -829,7 +993,7 @@ export const register: Register = (on, options) => {
     // the parts so far, named in their bar colours; beside the total when they fit
     const shownParts = costParts.filter(([, usd]) => usd > 0)
     const legendWidth = shownParts.reduce((w, [name, usd]) => w + 5 + name.length + 1 + money(usd).length, 0)
-    const legendBeside = LABEL + meterCells + 1 + money(total).length + legendWidth <= dataWidth
+    const legendBeside = LABEL + meterCells + 1 + money(total).length + legendWidth <= rowsWidth
     const costLegend = (
       <Text {...bg}>
         {shownParts.map(([name, usd, color]) => (
@@ -922,125 +1086,134 @@ export const register: Register = (on, options) => {
               </Text>,
             ]
           )}
-          <Text {...bg} wrap="truncate-end">
-            {used.map((r, i) => (
-              <Text key={`l${i}`} {...bg}>
-                {t(colorFor(r), '● ')}
-                {t(MUTED, `${shortName(r.name)} ${compact(r.tokens)}${i < used.length - 1 ? '   ' : ''}`)}
-              </Text>
-            ))}
-          </Text>
-          {dataWidth >= MIN_DATA_FOR_ONE_LIMIT_ROW ? (
-            <Text {...bg} wrap="truncate-end">
-              {limit('5H', s.fiveHour, fiveWarning)}
-              {t(MUTED, '     ')}
-              {limit('WEEK', s.sevenDay)}
-            </Text>
-          ) : (
-            [
-              <Text key="five" {...bg} wrap="truncate-end">
-                {limit('5H', s.fiveHour, fiveWarning)}
-              </Text>,
-              <Text key="week" {...bg} wrap="truncate-end">
-                {limit('WEEK', s.sevenDay)}
-              </Text>,
-            ]
-          )}
-          {coached.isReset && (
-            <Box {...bg} flexDirection="row" alignItems="center">
-              {label('5H')}
-              {t(GREEN, 'reset!  ', { bold: true })}
-              <Button
-                key="continue"
-                variant="primary"
-                label="Continue where we left off"
-                onPress={() => void continueWork($)}
-              />
-            </Box>
-          )}
-          <Text {...bg} wrap="truncate-end">
-            {label('CACHE')}
-            {hit === null ? (
-              t(MUTED, "fills in after Claude's next reply")
-            ) : (
-              <Text {...bg}>
-                {meter(hit, TEAL, meterCells)}
-                {t(TEAL, ` ${Math.round(hit * 100)}% reused`, { bold: true })}
-                {inputSeen > 0
-                  ? sp.usdSaved >= 0.005 && (
-                      <Text {...bg}>
-                        {t(MUTED, '   saved ')}
-                        {t(GREEN, money(sp.usdSaved), { bold: true })}
-                        {t(MUTED, ' vs no cache')}
-                      </Text>
-                    )
-                  : t(MUTED, '   on the last reply')}
-              </Text>
-            )}
-          </Text>
-          <Text {...bg} wrap="truncate-end">
-            {label('API $')}
-            {total > 0
-              ? costParts.map(([name, , color], i) => (
-                  <Text key={`k${name}`} {...bg} color={color}>
-                    {'▰'.repeat(costCells[i] ?? 0)}
+          <Box {...bg} flexDirection="row">
+            <Box {...bg} flexDirection="column" flexGrow={1}>
+              <Text {...bg} wrap="truncate-end">
+                {used.map((r, i) => (
+                  <Text key={`l${i}`} {...bg}>
+                    {t(colorFor(r), '● ')}
+                    {t(MUTED, `${shortName(r.name)} ${compact(r.tokens)}${i < used.length - 1 ? '   ' : ''}`)}
                   </Text>
-                ))
-              : t(TRACK, '▱'.repeat(meterCells))}
-            {t(TEXT, ` ${money(total)}`, { bold: true })}
-            {total > 0 ? (legendBeside ? costLegend : null) : t(MUTED, '   at API rates')}
-          </Text>
-          {total > 0 && !legendBeside && (
-            <Text {...bg} wrap="truncate-end">
-              {t(MUTED, ' '.repeat(LABEL - 3))}
-              {costLegend}
-            </Text>
-          )}
-          {/* the model sits under the weather in the fun column; with no fun column, here */}
-          {!showFun && modelLine}
-          {newest && (
-            <Box {...bg} flexDirection="row" alignItems="center">
-              {label('OUTPUT')}
-              {t(PEACH, '▣ ')}
-              {t(TEXT, newest.name.length > 40 ? `${newest.name.slice(0, 37)}...` : newest.name, { bold: true })}
-              {t(MUTED, `  ${ago(now, newest.mtimeMs)}  `)}
-              <Box {...bg} marginRight={1}>
-                <Button key="open-output" label="Open" onPress={() => void openPath($, newest.path, false)} />
+                ))}
+              </Text>
+              {rowsWidth >= MIN_DATA_FOR_ONE_LIMIT_ROW ? (
+                <Text {...bg} wrap="truncate-end">
+                  {limit('5H', s.fiveHour, fiveWarning)}
+                  {t(MUTED, '     ')}
+                  {limit('WEEK', s.sevenDay)}
+                </Text>
+              ) : (
+                [
+                  <Text key="five" {...bg} wrap="truncate-end">
+                    {limit('5H', s.fiveHour, fiveWarning)}
+                  </Text>,
+                  <Text key="week" {...bg} wrap="truncate-end">
+                    {limit('WEEK', s.sevenDay)}
+                  </Text>,
+                ]
+              )}
+              {coached.isReset && (
+                <Box {...bg} flexDirection="row" alignItems="center">
+                  {label('5H')}
+                  {t(GREEN, 'reset!  ', { bold: true })}
+                  <Button
+                    key="continue"
+                    variant="primary"
+                    label="Continue where we left off"
+                    onPress={() => void continueWork($)}
+                  />
+                </Box>
+              )}
+              <Text {...bg} wrap="truncate-end">
+                {label('CACHE')}
+                {hit === null ? (
+                  t(MUTED, "fills in after Claude's next reply")
+                ) : (
+                  <Text {...bg}>
+                    {meter(hit, TEAL, meterCells)}
+                    {t(TEAL, ` ${Math.round(hit * 100)}% reused`, { bold: true })}
+                    {inputSeen > 0
+                      ? sp.usdSaved >= 0.005 && (
+                          <Text {...bg}>
+                            {t(MUTED, '   saved ')}
+                            {t(GREEN, money(sp.usdSaved), { bold: true })}
+                            {t(MUTED, ' vs no cache')}
+                          </Text>
+                        )
+                      : t(MUTED, '   on the last reply')}
+                  </Text>
+                )}
+              </Text>
+              <Text {...bg} wrap="truncate-end">
+                {label('API $')}
+                {total > 0
+                  ? costParts.map(([name, , color], i) => (
+                      <Text key={`k${name}`} {...bg} color={color}>
+                        {'▰'.repeat(costCells[i] ?? 0)}
+                      </Text>
+                    ))
+                  : t(TRACK, '▱'.repeat(meterCells))}
+                {t(TEXT, ` ${money(total)}`, { bold: true })}
+                {total > 0 ? (legendBeside ? costLegend : null) : t(MUTED, '   at API rates')}
+              </Text>
+              {total > 0 && !legendBeside && (
+                <Text {...bg} wrap="truncate-end">
+                  {t(MUTED, ' '.repeat(LABEL - 3))}
+                  {costLegend}
+                </Text>
+              )}
+              {/* the model sits under the weather in the fun column; with no fun column, here */}
+              {!showFun && modelLine}
+              {newest && (
+                <Box {...bg} flexDirection="row" alignItems="center">
+                  {label('OUTPUT')}
+                  {t(PEACH, '▣ ')}
+                  {t(TEXT, newest.name.length > 40 ? `${newest.name.slice(0, 37)}...` : newest.name, { bold: true })}
+                  {t(MUTED, `  ${ago(now, newest.mtimeMs)}  `)}
+                  <Box {...bg} marginRight={1}>
+                    <Button key="open-output" label="Open" onPress={() => void openPath($, newest.path, false)} />
+                  </Box>
+                  <Button key="open-folder" label="Folder" onPress={() => void openPath($, newest.path, true)} />
+                </Box>
+              )}
+              <Box {...bg} flexDirection="row" flexWrap="wrap" alignItems="center">
+                {label('ASK')}
+                {ACTIONS.map(([key, name, prompt]) => (
+                  <Box key={key} {...bg} marginRight={1}>
+                    <Button key={key} label={name} onPress={() => void sendPrompt($, prompt)} />
+                  </Box>
+                ))}
+                {/* compaction only earns its button once the context is getting full */}
+                {s.percent >= COMPACT_FROM && (
+                  <Box key="compact" {...bg} marginRight={1}>
+                    <Button key="compact" label={`Compact · ${s.percent}%`} onPress={() => void compactNow($)} />
+                  </Box>
+                )}
               </Box>
-              <Button key="open-folder" label="Folder" onPress={() => void openPath($, newest.path, true)} />
+              {shownAgents.length > 0 && (
+                <Text {...bg} wrap="truncate-end">
+                  {label('AGENTS')}
+                  {shownAgents.map((a, i) => (
+                    <Text key={a.id} {...bg}>
+                      {t(YELLOW, `${SPINNER[(spinFrame + i * 3) % SPINNER.length]} `)}
+                      {t(TEXT, a.name, { bold: true })}
+                      {t(MUTED, ` ${a.type}${i < shownAgents.length - 1 ? '   ' : ''}`)}
+                    </Text>
+                  ))}
+                  {live.length > shownAgents.length && t(MUTED, `   +${live.length - shownAgents.length}`)}
+                </Text>
+              )}
+              <Text {...bg} wrap="wrap">
+                {t(YELLOW, '✦ ')}
+                {t(TEXT, shownQuote || (QUOTES[0] ?? ''), { italic: true })}
+              </Text>
             </Box>
-          )}
-          <Box {...bg} flexDirection="row" flexWrap="wrap" alignItems="center">
-            {label('ASK')}
-            {ACTIONS.map(([key, name, prompt]) => (
-              <Box key={key} {...bg} marginRight={1}>
-                <Button key={key} label={name} onPress={() => void sendPrompt($, prompt)} />
-              </Box>
-            ))}
-            {/* compaction only earns its button once the context is getting full */}
-            {s.percent >= COMPACT_FROM && (
-              <Box key="compact" {...bg} marginRight={1}>
-                <Button key="compact" label={`Compact · ${s.percent}%`} onPress={() => void compactNow($)} />
+            {showDesk && (
+              <Box {...bg} marginLeft={DESK_GAP}>
+                <Client key="desk" module="./desk.tsx" props={desk} width={DESK_WIDTH} />
               </Box>
             )}
           </Box>
-          {shownAgents.length > 0 && (
-            <Text {...bg} wrap="truncate-end">
-              {label('AGENTS')}
-              {shownAgents.map((a, i) => (
-                <Text key={a.id} {...bg}>
-                  {t(YELLOW, `${SPINNER[(spinFrame + i * 3) % SPINNER.length]} `)}
-                  {t(TEXT, a.name, { bold: true })}
-                  {t(MUTED, ` ${a.type}${i < shownAgents.length - 1 ? '   ' : ''}`)}
-                </Text>
-              ))}
-              {live.length > shownAgents.length && t(MUTED, `   +${live.length - shownAgents.length}`)}
-            </Text>
-          )}
-          <Text {...bg} wrap="wrap">
-            {t(YELLOW, '✦ ')}
-            {t(TEXT, shownQuote || (QUOTES[0] ?? ''), { italic: true })}
-          </Text>
         </Box>
       </Box>
     )

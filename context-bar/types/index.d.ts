@@ -102,6 +102,18 @@ export type FunProps = {
   celebrate: number | null
 }
 
+/** The desk's focus timer: 25 minutes of focus, then a 5-minute break. */
+export type Pomodoro = { phase: 'idle' | 'focus' | 'break'; endsAt: number | null; rounds: number }
+
+/** The desk's ambient sound. */
+export type Ambient = 'off' | 'rain' | 'fire' | 'focus'
+
+/** What the desk's surface module draws from; plain data. */
+export type DeskProps = { goal: string; pomodoro: Pomodoro; ambient: Ambient; now: number }
+
+/** What the desk posts to the hooks module when it is clicked or typed into. */
+export type DeskMessage = { type: 'goal'; text: string } | { type: 'pomodoro' } | { type: 'ambient' }
+
 /** What the fun column posts to the hooks module when it is clicked. */
 export type FunMessage =
   | { type: 'effort'; level: string }
@@ -123,6 +135,10 @@ declare module 'claude-code' {
       coach: Coach
       gpu: Gpu | null
       celebrate: number | null
+      /** This project's goal, written in the desk's notebook. */
+      goal: string
+      pomodoro: Pomodoro
+      ambient: Ambient
       wellness: Wellness
       output: Output | null
       /** An effort chosen from the card or typed, for the model it was set on. */

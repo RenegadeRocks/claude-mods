@@ -487,7 +487,8 @@ test('the cost breakdown moves under the bar when it would not fit beside it', a
   await $.turn.complete(aTurn as never)
   await clock.settle()
 
-  const wide = await mountBand($, { ...props, bodyColumns: 200 })
+  // beside the bar it needs room: on a very wide window, with the desk on the right
+  const wide = await mountBand($, { ...props, bodyColumns: 260 })
   const wideRow = (await textsOf(wide)).find(t => t.startsWith('API $'))
   expect(wideRow).toMatch(/other \$0\.02/)
   await wide.unmount()
@@ -603,7 +604,7 @@ test('a wide window puts the pet beside its info rows and the context on one row
   expect(fun).toContain('RenegadeRocks claude code')
 
   // a click on the pet's columns, on any row, is a click on the pet
-  await ui.pointer({ type: 'down', x: 4, y: 1, button: 'left' })
+  await ui.pointer({ type: 'down', x: 4, y: 1, button: 'left', in: 'fun' })
   expect((await funTextsOf(ui)).some(t => /\^w\^|\^o\^|\^v\^|-w-|\*\.\*|@\.@/.test(t))).toBe(true)
 
   // the label, the bar and the token counts share one row
@@ -786,4 +787,92 @@ test('a pink pet says why when clicked, then goes back to its tricks', async ($,
   expect(await said()).not.toContain('full!')
   expect(/\^w\^|\^o\^|\^v\^|-w-|\*\.\*|@\.@/.test(await said())).toBe(true)
   await ui.unmount()
+})
+
+const deskTexts = async (ui: Band) => (await ui.findAll({ type: 'Text', in: 'desk' })).map(t => t.text ?? '')
+// the desk's rows: seven of scene, then the notebook strip, then the drawer
+const NOTE = 7
+const DRAWER = 8
+
+test('a wide window gets the desk: a drawn scene, a notebook and a drawer', async ($, on) => {
+  const clock = world(on)
+  await started($, clock)
+  const ui = await mountBand($, { ...props, bodyColumns: 190 })
+  const desk = await deskTexts(ui)
+  expect(desk.some(t => t.includes('▀'))).toBe(true)
+  expect(desk.some(t => /click to write today's goal/.test(t))).toBe(true)
+  expect(desk.some(t => /◷ start a 25-min focus/.test(t))).toBe(true)
+  expect(desk.some(t => /♪ sounds off/.test(t))).toBe(true)
+  await ui.unmount()
+
+  // a narrower window keeps its rows and leaves the desk out
+  const narrow = await mountBand($, { ...props, bodyColumns: 150 })
+  expect(await narrow.find({ type: 'Client', key: 'desk' })).toBeUndefined()
+  await narrow.unmount()
+})
+
+test("the notebook holds this project's goal, typed in place", async ($, on) => {
+  const clock = world(on)
+  await started($, clock)
+  const ui = await mountBand($, { ...props, bodyColumns: 190 })
+
+  await ui.pointer({ type: 'down', x: 10, y: NOTE, button: 'left', in: 'desk' })
+  expect(await ui.find({ type: 'Input', in: 'desk' })).toBeDefined()
+
+  await ui.input({ key: 'goal', text: 'fix the fairy feet' })
+  await clock.settle()
+  expect((await deskTexts(ui)).some(t => /✎ fix the fairy feet/.test(t))).toBe(true)
+  await ui.unmount()
+
+  // a new session in the same project opens the notebook where it was left
+  await started($, clock)
+  const back = await mountBand($, { ...props, bodyColumns: 190 })
+  expect((await deskTexts(back)).some(t => /✎ fix the fairy feet/.test(t))).toBe(true)
+  await back.unmount()
+})
+
+test('the focus timer runs 25 minutes, rings, then a 5-minute break', async ($, on) => {
+  const clock = world(on)
+  await started($, clock)
+  const ui = await mountBand($, { ...props, bodyColumns: 190 })
+
+  await ui.pointer({ type: 'down', x: 3, y: DRAWER, button: 'left', in: 'desk' })
+  await clock.settle()
+  expect((await deskTexts(ui)).some(t => /◷ 25:00 focus {2}○○○○/.test(t))).toBe(true)
+
+  await clock.advance(25 * 60_000 + 10_000)
+  expect(toasts.some(t => /Focus round done/.test(t))).toBe(true)
+  expect(processes.some(p => p.join(' ').includes('bell.wav'))).toBe(true)
+  await ui.unmount()
+  const rest = await mountBand($, { ...props, bodyColumns: 190 })
+  expect((await deskTexts(rest)).some(t => /◌ \d:\d\d break {2}●○○○/.test(t))).toBe(true)
+  await rest.unmount()
+})
+
+test('the sound button steps through rain, fireplace and deep focus, and plays them', async ($, on) => {
+  const clock = world(on)
+  await started($, clock)
+  const ui = await mountBand($, { ...props, bodyColumns: 190 })
+  const click = () => ui.pointer({ type: 'down', x: 40, y: DRAWER, button: 'left', in: 'desk' })
+
+  await click()
+  await clock.settle()
+  expect((await deskTexts(ui)).some(t => /♪ rain/.test(t))).toBe(true)
+
+  await click()
+  await clock.settle()
+  expect((await deskTexts(ui)).some(t => /♪ fireplace/.test(t))).toBe(true)
+  await click()
+  await click()
+  await clock.settle()
+  expect((await deskTexts(ui)).some(t => /♪ sounds off/.test(t))).toBe(true)
+
+  // the choice is remembered: a new session starts the same sound
+  await click()
+  await clock.settle()
+  await ui.unmount()
+  await started($, clock)
+  const back = await mountBand($, { ...props, bodyColumns: 190 })
+  expect((await deskTexts(back)).some(t => /♪ rain/.test(t))).toBe(true)
+  await back.unmount()
 })

@@ -20,6 +20,12 @@ A Claude Code mod that puts a card above your prompt.
 
 **Wellness nudges:** after 20 minutes of active work the pet closes its eyes and asks you to rest yours; after 60 it asks for a water break. Click the pet when you've done it. The pet chimes when a nudge or a finished GPU job needs you, and again every 5 minutes until you click; after a GPU job it keeps celebrating until then. `/context-bar sounds off` keeps it quiet. Time away counts as a break, so sessions that run for days don't matter. Change the minutes in `/plugin configure`, or turn them off with `/context-bar nudges off`.
 
+**The desk** (wide windows, about 165 columns and up): a cozy night desk drawn in pixels beside the numbers, with a moonlit window, a wall clock showing the real time, books, a plant, a steaming mug and a lamp. Click the lamp to switch it off and on.
+
+- **Notebook:** click the paper strip and type this project's goal; it's there again next time you open the project.
+- **Focus timer:** click "start a 25-min focus" for a Pomodoro: 25 minutes of focus, a bell, then a 5-minute break. The dots count your rounds.
+- **Ambient sound:** click the sound on the right to step through rain, fireplace, deep focus and off. Rain falls on the window and the lamp flickers by the fire. Your choice carries over to the next session.
+
 ## Install
 
 In Claude Code, type:
