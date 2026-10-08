@@ -13,7 +13,7 @@ A Claude Code mod that puts a card above your prompt.
 In Claude Code, type:
 
 ```
-/plugin install context-bar --marketplace RenegadeRocks/context-bar
+/plugin install context-bar --marketplace RenegadeRocks/claude-mods
 ```
 
 Press `y` to add the marketplace, then pick the **user** scope so it shows in every session. It works right away.

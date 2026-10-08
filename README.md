@@ -13,9 +13,9 @@ Three mods for Claude Code. Install any of them, or all three.
 In Claude Code, type one line per mod:
 
 ```
-/plugin install context-bar --marketplace RenegadeRocks/context-bar
-/plugin install soundtrack --marketplace RenegadeRocks/context-bar
-/plugin install project-colors --marketplace RenegadeRocks/context-bar
+/plugin install context-bar --marketplace RenegadeRocks/claude-mods
+/plugin install soundtrack --marketplace RenegadeRocks/claude-mods
+/plugin install project-colors --marketplace RenegadeRocks/claude-mods
 ```
 
 The first time, press `y` to add the marketplace. Pick the **user** scope so a mod shows in every session. Each one works right away.
