@@ -764,3 +764,26 @@ test('/context-bar sounds off keeps Rocky quiet', async ($, on) => {
   expect(toasts.some(t => /rest your eyes/.test(t))).toBe(true)
   expect(processes.some(p => p.join(' ').includes('.wav'))).toBe(false)
 })
+
+test('a pink pet says why when clicked, then goes back to its tricks', async ($, on) => {
+  const clock = world(on)
+  contextPercent = 88
+  await started($, clock)
+  const ui = await mountBand($, { ...props, isWorking: false })
+  const said = async () => (await funTextsOf(ui)).join('|')
+
+  await ui.pointer({ type: 'move', x: 10, y: 7 })
+  expect(await said()).toContain('88% full · click')
+
+  await ui.pointer({ type: 'down', x: 10, y: 7, button: 'left' })
+  expect(await said()).toContain("I'm 88% full!")
+  await ui.advance(12 * 140)
+  expect(await said()).toContain('Compact helps')
+
+  // after it has said its piece, a click is a trick again
+  await ui.advance(6000)
+  await ui.pointer({ type: 'down', x: 10, y: 7, button: 'left' })
+  expect(await said()).not.toContain('full!')
+  expect(/\^w\^|\^o\^|\^v\^|-w-|\*\.\*|@\.@/.test(await said())).toBe(true)
+  await ui.unmount()
+})

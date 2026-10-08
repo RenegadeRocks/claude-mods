@@ -36,6 +36,12 @@ const MODELS: [string, string][] = [
 ]
 // the gap between the pet and its info rows, side by side
 const SIDE_GAP = 3
+// a full-ish pet explains itself this many frames (5 s), then not again for a minute
+const EXPLAIN_FRAMES = 36
+const EXPLAIN_REST_FRAMES = 430
+// the pet's colour turns peach from this context share, pink from the next
+const WARM = 65
+const FULL = 85
 
 type Local = {
   frame: number
@@ -43,9 +49,11 @@ type Local = {
   last: string
   isHovered: boolean
   isPicking: boolean
+  /** The frame the pet last said why it is peach or pink; null before. */
+  explainedAt: number | null
 }
 
-const FRESH: Local = { frame: 0, reaction: null, last: '', isHovered: false, isPicking: false }
+const FRESH: Local = { frame: 0, reaction: null, last: '', isHovered: false, isPicking: false, explainedAt: null }
 
 const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
   const { Box, Text } = surface.elements
@@ -68,9 +76,24 @@ const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
     : props.nudge
       ? { text: 'click when done', color: PINK }
       : local.isHovered
-        ? { text: `♥ pet ${PET_NAME}`, color: PINK }
+        ? { text: props.percent >= WARM ? `${props.percent}% full · click` : `♥ pet ${PET_NAME}`, color: PINK }
         : { text: `${PET_NAME} · ${stage.title}`, color: mood }
   const view = petView(stage.lines, props.pet, props.phase, frame, props.percent >= 85, plate, reaction, props.nudge)
+  // saying why it is peach or pink: two short lines, a few seconds each
+  const isExplaining = local.explainedAt !== null && frame - local.explainedAt < EXPLAIN_FRAMES
+  if (isExplaining) {
+    const width = view.pet[0]?.length ?? 16
+    const said =
+      Math.floor((frame - (local.explainedAt ?? frame)) / 12) % 2 === 0
+        ? props.percent >= FULL
+          ? `I'm ${props.percent}% full!`
+          : `getting full ${props.percent}%`
+        : props.percent >= FULL
+          ? 'Compact helps'
+          : 'Compact soon'
+    const left = Math.max(0, Math.floor((width - said.length) / 2))
+    view.top = [{ text: (' '.repeat(left) + said).padEnd(width).slice(0, width), color: PINK }]
+  }
   const effortLevel = EFFORTS.indexOf(props.effort ?? '') + 1
   const anim = props.phase === 'thinking' ? thinkingCells(frame) : props.phase === 'working' ? workingCells(frame) : []
   const labelColor = props.phase === 'thinking' ? MAUVE : props.phase === 'working' ? YELLOW : MUTED
@@ -108,6 +131,12 @@ const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
         if (props.nudge) {
           post({ type: 'nudge-done' })
           surface.setState({ ...s, reaction: { kind: 'hearts', at: s.frame }, last: 'hearts' })
+          return
+        }
+        // peach or pink: the first click says why, in its speech row
+        const isWarm = props.percent >= WARM
+        if (isWarm && (s.explainedAt === null || s.frame - s.explainedAt > EXPLAIN_REST_FRAMES)) {
+          surface.setState({ ...s, explainedAt: s.frame, reaction: null })
           return
         }
         let kind = s.last

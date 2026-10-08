@@ -10,6 +10,8 @@ A Claude Code mod that puts a card above your prompt.
 
 **Buttons:** one click sends a prompt you'd otherwise type: **Recap** (what are we doing, what's done, what's next), **Update memory**, **Keep going**, and **Team update** (a short status to paste to your team). **Compact** appears once the context passes 60% and runs `/compact`.
 
+**Why is the pet peach or pink?** Its colour follows how full the context is: peach from 65%, pink from 85%. Click it then and it tells you ("I'm 88% full!", "Compact helps"); hover shows the share.
+
 **Click to change model and effort:** click a cell of the effort meter under the weather to set that effort. Click the model name for a picker (Sonnet · Opus · Fable · Haiku).
 
 **Newest output:** the newest image or video saved under your project this session, with **Open** and **Folder** buttons.
