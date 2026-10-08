@@ -72,6 +72,8 @@ export type Weather = {
 /** What the fun column's surface module draws from; plain data. */
 export type FunProps = {
   showTagline: boolean
+  /** 'side': the pet beside its info rows (wide terminals); 'stack': the info rows above it. */
+  layout: 'side' | 'stack'
   pet: 'cat' | 'dog'
   /** The model and its effort, shown under the weather: 'Opus 5.5', 'high' (null when none). */
   model: string

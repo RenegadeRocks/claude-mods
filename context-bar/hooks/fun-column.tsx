@@ -43,12 +43,16 @@ const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
   const label = props.phase
   const labelColor = props.phase === 'thinking' ? MAUVE : props.phase === 'working' ? YELLOW : MUTED
 
-  // rows above the pet: signature, session, weather (when known), model, animation
+  // Side by side, the pet takes the column's first cells on every row; stacked,
+  // it sits under the info rows: signature, session, weather (when known),
+  // model, phase.
+  const isSide = props.layout === 'side'
+  const petWidth = view.pet[0]?.length ?? 16
   const petTop = props.weather ? 5 : 4
   surface.onPointer(e => {
     const s = surface.state
     if (!s) return
-    const isOverPet = e.y >= petTop && e.type !== 'leave'
+    const isOverPet = e.type !== 'leave' && (isSide ? e.x < petWidth : e.y >= petTop)
     if (e.type === 'down' && e.button === 'left' && isOverPet) {
       let kind = s.last
       while (kind === s.last) kind = REACTIONS[Math.floor(Math.random() * REACTIONS.length)] ?? 'hearts'
@@ -68,7 +72,7 @@ const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
     </Text>
   )
 
-  return (
+  const infoRows = (
     <Box flexDirection="column" backgroundColor={BG}>
       <Text backgroundColor={BG} wrap="truncate-end">
         {gradient(SIGNATURE, SIGNATURE_STOPS).map((c, i) => (
@@ -109,23 +113,40 @@ const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
         ))}
         {t(labelColor, `${anim.length > 0 ? ' ' : ''}${label}`)}
       </Text>
-      <Box key="pet" flexDirection="column" alignSelf="center" backgroundColor={BG}>
-        {view.top.map((r, i) => (
-          <Text key={`pt${i}`} backgroundColor={BG} color={r.color}>
-            {r.text}
-          </Text>
-        ))}
-        {view.pet.map((line, i) => (
-          <Text key={`pet-${i}`} backgroundColor={BG} color={mood}>
-            {line}
-          </Text>
-        ))}
-        {view.bottom.map((r, i) => (
-          <Text key={`pb${i}`} backgroundColor={BG} color={r.color}>
-            {r.text}
-          </Text>
-        ))}
+    </Box>
+  )
+
+  const petBlock = (
+    <Box key="pet" flexDirection="column" alignSelf="center" backgroundColor={BG}>
+      {view.top.map((r, i) => (
+        <Text key={`pt${i}`} backgroundColor={BG} color={r.color}>
+          {r.text}
+        </Text>
+      ))}
+      {view.pet.map((line, i) => (
+        <Text key={`pet-${i}`} backgroundColor={BG} color={mood}>
+          {line}
+        </Text>
+      ))}
+      {view.bottom.map((r, i) => (
+        <Text key={`pb${i}`} backgroundColor={BG} color={r.color}>
+          {r.text}
+        </Text>
+      ))}
+    </Box>
+  )
+
+  return isSide ? (
+    <Box flexDirection="row" alignItems="center" backgroundColor={BG}>
+      {petBlock}
+      <Box marginLeft={3} backgroundColor={BG}>
+        {infoRows}
       </Box>
+    </Box>
+  ) : (
+    <Box flexDirection="column" backgroundColor={BG}>
+      {infoRows}
+      {petBlock}
     </Box>
   )
 }

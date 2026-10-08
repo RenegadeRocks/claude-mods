@@ -63,6 +63,10 @@ const coach = atom({ plugin: 'context-bar', key: 'coach' } as const, NO_COACH)
 const COLUMN_GAP = 3
 // below this the card drops the fun column and keeps the numbers
 const MIN_COLUMNS_FOR_FUN = 48
+// the pet sits beside its info rows from this terminal width, which saves rows
+const MIN_COLUMNS_FOR_SIDE = 140
+// the context label and numbers share the bar's row from this data width
+const MIN_DATA_FOR_ONE_CONTEXT_ROW = 60
 // the two limits share a row from this data width, and stack below it
 const MIN_DATA_FOR_ONE_LIMIT_ROW = 56
 const MIN_CELLS = 12
@@ -82,9 +86,12 @@ const AGENT_NAMES = [
   'Maple', 'Cosmo', 'Tofu', 'Pogo', 'Comet', 'Ziggy', 'Fudge', 'Gizmo', 'Sunny', 'Bean',
 ]
 
-/** The fun column's width: full from 100 columns, compact from 70, smallest below. */
+/**
+ * The fun column's width: from 140 columns wide enough for the pet beside its
+ * info rows; full from 100, compact from 70, smallest below, the pet stacked.
+ */
 function funColumns(columns: number): number {
-  return columns >= 100 ? 34 : columns >= 70 ? 26 : 20
+  return columns >= MIN_COLUMNS_FOR_SIDE ? 56 : columns >= 100 ? 34 : columns >= 70 ? 26 : 20
 }
 
 // What the timers need, mirrored here because a timer cannot read atoms.
@@ -475,6 +482,7 @@ export const register: Register = (on, options) => {
     const sky = wx ? skyStyle(wx.code, wx.isDay) : null
     const fun: FunProps = {
       showTagline: funWidth >= 26,
+      layout: columns >= MIN_COLUMNS_FOR_SIDE ? 'side' : 'stack',
       pet: await read($, pet),
       model: s.model,
       effort: s.effort,
@@ -495,7 +503,12 @@ export const register: Register = (on, options) => {
     // Context: used rows, then the compaction buffer, then free space.
     const used = s.rows.filter(r => r.kind === 'used' && r.tokens > 0)
     const bar = [...used, ...s.rows.filter(r => r.kind === 'buffer'), ...s.rows.filter(r => r.kind === 'free')]
-    const cells = allocate(bar, s.maxTokens, Math.min(MAX_CELLS, Math.max(MIN_CELLS, dataWidth)))
+    // one row when there is room: the label and share, the bar, the token counts
+    const contextHead = `CONTEXT  ${s.percent}%  `
+    const contextTail = `  ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`
+    const isOneContextRow = dataWidth >= MIN_DATA_FOR_ONE_CONTEXT_ROW
+    const barWidth = isOneContextRow ? dataWidth - contextHead.length - contextTail.length : dataWidth
+    const cells = allocate(bar, s.maxTokens, Math.min(MAX_CELLS, Math.max(MIN_CELLS, barWidth)))
 
     // Cache: the share of the input reused from the prompt cache, which is
     // billed at a fraction of the input rate. The session's turns when the
@@ -545,6 +558,12 @@ export const register: Register = (on, options) => {
     const coached = await read($, coach)
     const eta = minutesToFull(coached.samples, now, s.fiveHour)
 
+    const barCells = bar.map((r, i) => (
+      <Text key={`c${i}`} {...bg} color={colorFor(r)}>
+        {(r.kind === 'free' ? '░' : r.kind === 'buffer' ? '▒' : '█').repeat(cells[i] ?? 0)}
+      </Text>
+    ))
+
     const limit = (name: string, lim: Limit | null, warning: string | null = null) => (
       <Text {...bg}>
         {label(name)}
@@ -592,18 +611,26 @@ export const register: Register = (on, options) => {
           </Box>
         )}
         <Box {...bg} flexDirection="column" flexGrow={1}>
-          <Text {...bg} wrap="truncate-end">
-            {t(MUTED, 'CONTEXT  ')}
-            {t(mood, `${s.percent}%`, { bold: true })}
-            {t(MUTED, `   ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`)}
-          </Text>
-          <Box {...bg}>
-            {bar.map((r, i) => (
-              <Text key={`c${i}`} {...bg} color={colorFor(r)}>
-                {(r.kind === 'free' ? '░' : r.kind === 'buffer' ? '▒' : '█').repeat(cells[i] ?? 0)}
-              </Text>
-            ))}
-          </Box>
+          {isOneContextRow ? (
+            <Text {...bg} wrap="truncate-end">
+              {t(MUTED, 'CONTEXT  ')}
+              {t(mood, `${s.percent}%`, { bold: true })}
+              {t(MUTED, '  ')}
+              {barCells}
+              {t(MUTED, contextTail)}
+            </Text>
+          ) : (
+            [
+              <Text key="head" {...bg} wrap="truncate-end">
+                {t(MUTED, 'CONTEXT  ')}
+                {t(mood, `${s.percent}%`, { bold: true })}
+                {t(MUTED, `   ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`)}
+              </Text>,
+              <Text key="bar" {...bg}>
+                {barCells}
+              </Text>,
+            ]
+          )}
           <Text {...bg} wrap="truncate-end">
             {used.map((r, i) => (
               <Text key={`l${i}`} {...bg}>

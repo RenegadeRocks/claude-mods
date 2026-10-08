@@ -559,3 +559,24 @@ test('Limit Coach stays quiet when the window will reset before it fills', async
   expect(toasts).toEqual([])
   await ui.unmount()
 })
+
+test('a wide window puts the pet beside its info rows and the context on one row', async ($, on) => {
+  const clock = world(on)
+  await started($, clock)
+  const ui = await mountBand($, { ...props, bodyColumns: 190 })
+
+  // side by side: the column's top box is a row, the pet first, the info rows beside it
+  const column = await ui.find({ type: 'Box', in: 'fun' })
+  expect(column?.props.flexDirection).toBe('row')
+  const fun = await funTextsOf(ui)
+  expect(fun).toContain('RenegadeRocks claude code')
+
+  // a click on the pet's columns, on any row, is a click on the pet
+  await ui.pointer({ type: 'down', x: 4, y: 1, button: 'left' })
+  expect((await funTextsOf(ui)).some(t => /\^w\^|\^o\^|\^v\^|-w-|\*\.\*|@\.@/.test(t))).toBe(true)
+
+  // the label, the bar and the token counts share one row
+  const texts = await textsOf(ui)
+  expect(texts.some(t => /^CONTEXT {2}42% {2}█+.*░+ {2}84k \/ 200k$/.test(t))).toBe(true)
+  await ui.unmount()
+})
