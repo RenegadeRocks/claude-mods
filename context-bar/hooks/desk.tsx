@@ -11,7 +11,7 @@ import { DESK_WIDTH, DRAWER_ROW, NOTE_ROW, paintScene, runs } from './desk-art'
 
 const FRAME_MS = 250
 // the lamp, in cells: a click on it switches it off and on
-const LAMP = { x0: 33, x1: 43, y0: 0, y1: 5 }
+const LAMP = { x0: 32, x1: 42, y0: 1, y1: 5 }
 // the drawer's two controls, by column
 const TIMER_END = 26
 const SOUND_START = DESK_WIDTH - 16
