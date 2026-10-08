@@ -799,7 +799,7 @@ test('a wide window gets the desk: a drawn scene, a notebook and a drawer', asyn
   await started($, clock)
   const ui = await mountBand($, { ...props, bodyColumns: 190 })
   const desk = await deskTexts(ui)
-  expect(desk.some(t => t.includes('▀'))).toBe(true)
+  expect(desk.some(t => /[\u{1FB00}-\u{1FB3B}]/u.test(t))).toBe(true)
   expect(desk.some(t => /click to write today's goal/.test(t))).toBe(true)
   expect(desk.some(t => /◷ start a 25-min focus/.test(t))).toBe(true)
   expect(desk.some(t => /♪ sounds off/.test(t))).toBe(true)
