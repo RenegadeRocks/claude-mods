@@ -29,6 +29,18 @@
         "cat",
         "dog"
       ]
+    },
+    "eyesMinutes": {
+      "type": "number",
+      "title": "Rest-your-eyes reminder",
+      "description": "Minutes of active work between eye-rest nudges from the pet. 0 turns them off.",
+      "default": 20
+    },
+    "waterMinutes": {
+      "type": "number",
+      "title": "Water reminder",
+      "description": "Minutes of active work between water nudges from the pet. 0 turns them off.",
+      "default": 60
     }
   },
   "author": {

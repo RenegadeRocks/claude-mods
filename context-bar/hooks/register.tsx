@@ -5,8 +5,10 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentChip, ContextSnap, FunProps, Limit, Phase, Spend, Weather } from '../types'
+import type { AgentChip, ContextSnap, FunMessage, FunProps, Limit, Output, Phase, Spend, Weather } from '../types'
 import { NO_COACH, coachStep, coachTick, etaText, minutesToFull } from './coach'
+import { NO_TRACK, gpuStep, parseSmi } from './gpu'
+import { NO_WELLNESS, NUDGE_TOASTS, wellnessDone, wellnessTick } from './wellness'
 import {
   allocate,
   colorFor,
@@ -58,6 +60,11 @@ const quote = atom({ plugin: 'context-bar', key: 'quote' } as const, '')
 const spend = atom({ plugin: 'context-bar', key: 'spend' } as const, NO_SPEND)
 const pet = atom({ plugin: 'context-bar', key: 'pet' } as const, 'cat')
 const coach = atom({ plugin: 'context-bar', key: 'coach' } as const, NO_COACH)
+const gpu = atom({ plugin: 'context-bar', key: 'gpu' } as const, null)
+const cheer = atom({ plugin: 'context-bar', key: 'cheer' } as const, 0)
+const wellness = atom({ plugin: 'context-bar', key: 'wellness' } as const, NO_WELLNESS)
+const output = atom({ plugin: 'context-bar', key: 'output' } as const, null)
+const effortChoice = atom({ plugin: 'context-bar', key: 'effortChoice' } as const, null)
 
 // Layout, in terminal columns.
 const COLUMN_GAP = 3
@@ -78,6 +85,13 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
 // Timing.
 const SPINNER_MS = 280
 const MINUTE_TICK_MS = 10_000
+const GPU_POLL_MS = 5000
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
+// newest-output search: these kinds of file, this deep, skipping these folders
+const MEDIA = /\.(png|jpe?g|webp|gif|mp4|mov|webm|mkv|avi)$/i
+const OUTPUT_DEPTH = 4
+const OUTPUT_MAX_DIRS = 300
+const SKIP_DIRS = new Set(['node_modules', '.git', 'venv', '.venv', '__pycache__', '.cache', '.next'])
 const WEATHER_REFRESH_MS = 15 * 60_000
 // the Compact button shows from this context share
 const COMPACT_FROM = 60
@@ -112,6 +126,13 @@ const AGENT_NAMES = [
   'Maple', 'Cosmo', 'Tofu', 'Pogo', 'Comet', 'Ziggy', 'Fudge', 'Gizmo', 'Sunny', 'Bean',
 ]
 
+/** '3m ago', '2h ago', 'just now'. */
+function ago(now: number, then: number): string {
+  const mins = Math.floor((now - then) / 60_000)
+  if (mins < 1) return 'just now'
+  return mins < 60 ? `${mins}m ago` : `${Math.floor(mins / 60)}h ago`
+}
+
 /**
  * The fun column's width: from 140 columns wide enough for the pet beside its
  * info rows; full from 100, compact from 70, smallest below, the pet stacked.
@@ -128,6 +149,13 @@ let phaseSeq = 0
 let tick = 0
 let hasAgents = false
 let lastAgentsKey = ''
+// render watch: whether nvidia-smi answers here, and the job being watched
+let smiMissing = false
+let gpuTrack = NO_TRACK
+// wellness: activity seen since the last tick, and when it last was
+let activitySeen = false
+let lastActivity = 0
+let isWindows: boolean | null = null
 const agentNames = new Map<string, string>()
 
 /** A fun name per subagent, kept for as long as the session lives. */
@@ -254,6 +282,116 @@ async function coachClock($: EngineInterface) {
 
 /** The Continue button: clears the reset note and asks Claude to carry on. */
 /** An action button: its prompt goes in as if typed, queued while a turn runs. */
+/** Render watch: one GPU reading; a job that just ended gets a toast and a cheer from the pet. */
+async function pollGpu($: EngineInterface) {
+  if (smiMissing) return
+  try {
+    const { exitCode, stdout } = await $.process.run(
+      ['nvidia-smi', '--query-gpu=utilization.gpu,memory.used,memory.total', '--format=csv,noheader,nounits'],
+      { timeoutMs: 4000 },
+    )
+    const reading = exitCode === 0 ? parseSmi(stdout) : null
+    if (!reading) return
+    const step = gpuStep(gpuTrack, await $.clock.now(), reading)
+    gpuTrack = step.track
+    await update($, gpu, () => step.gpu)
+    if (step.finishedMinutes !== null) {
+      await update($, cheer, n => n + 1)
+      $.ui.toast(`GPU job finished after ${step.finishedMinutes}m. Rocky is celebrating!`, { timeoutMs: 8000 })
+    }
+  } catch {
+    // no NVIDIA GPU or no nvidia-smi: stop asking
+    smiMissing = true
+  }
+}
+
+/** Wellness clock: counts active time and lets the pet nudge when a break is due. */
+async function wellnessClock($: EngineInterface, eyesMs: number, waterMs: number) {
+  try {
+    const now = await $.clock.now()
+    if (activitySeen || lastActivity === 0) lastActivity = now
+    activitySeen = false
+    if ((await $.store.get('nudges')) === false) return
+    let nudged: 'eyes' | 'water' | null = null
+    await update($, wellness, w => {
+      const step = wellnessTick(w, now - lastActivity, MINUTE_TICK_MS, eyesMs, waterMs)
+      nudged = step.nudged
+      return step.next
+    })
+    if (nudged) $.ui.toast(NUDGE_TOASTS[nudged], { timeoutMs: 10_000 })
+  } catch {
+    // a missed tick changes little
+  }
+}
+
+/** A click in the fun column: an effort or model change, or a nudge answered. */
+async function funClicked($: EngineInterface, message: FunMessage) {
+  try {
+    if (message.type === 'nudge-done') {
+      await update($, wellness, wellnessDone)
+      return
+    }
+    if (message.type === 'effort' && EFFORT_LEVELS.includes(message.level)) {
+      const model = (await read($, snap))?.model ?? ''
+      await update($, effortChoice, () => ({ model, level: message.level }))
+      $.clock.after(0, () => void $.command.run({ command: 'effort', args: message.level } as never).catch(() => {}))
+      return
+    }
+    if (message.type === 'model') {
+      $.clock.after(0, () => void $.command.run({ command: 'model', args: message.alias } as never).catch(() => {}))
+      // read the new model's name once the switch has landed
+      $.clock.after(1500, () => void refresh($))
+    }
+  } catch {
+    // a missed click is fine
+  }
+}
+
+/** The newest image or video saved under the project since the session began. */
+async function scanOutputs($: EngineInterface) {
+  try {
+    const root = await $.session.root()
+    const since = (await read($, snap))?.startedAt ?? 0
+    const sep = root.includes('\\') ? '\\' : '/'
+    let newest: Output | null = null
+    let queue: [string, number][] = [[root, 0]]
+    let seen = 0
+    while (queue.length > 0 && seen < OUTPUT_MAX_DIRS) {
+      const [dir, depth] = queue.shift() ?? [root, 0]
+      seen += 1
+      const entries = await $.fs.list(dir).catch(() => [])
+      for (const entry of entries) {
+        const path = `${dir.replace(/[\\/]+$/, '')}${sep}${entry.name}`
+        if (entry.kind === 'dir') {
+          if (depth < OUTPUT_DEPTH && !SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) queue.push([path, depth + 1])
+        } else if (MEDIA.test(entry.name) && entry.mtimeMs >= since && entry.mtimeMs > (newest?.mtimeMs ?? 0)) {
+          newest = { path, name: entry.name, mtimeMs: entry.mtimeMs }
+        }
+      }
+    }
+    if (newest) await update($, output, () => newest)
+  } catch {
+    // no output row this time
+  }
+}
+
+/** Opens a file in its default app, or shows it in its folder. */
+async function openPath($: EngineInterface, path: string, isReveal: boolean) {
+  try {
+    isWindows ??= (await $.env.get('OS')) === 'Windows_NT'
+    const argv = isWindows
+      ? isReveal
+        ? ['explorer', `/select,${path}`]
+        : ['cmd', '/c', 'start', '', path]
+      : isReveal
+        ? ['open', '-R', path]
+        : ['open', path]
+    await $.process.run(argv, { timeoutMs: 10_000 })
+  } catch {
+    // the file may have moved
+  }
+}
+
 async function sendPrompt($: EngineInterface, text: string) {
   try {
     await $.prompt.submit({ text } as never)
@@ -361,6 +499,9 @@ export const register: Register = (on, options) => {
   const city = String(options.city ?? 'Ludhiana').trim()
   const unit = String(options.unit ?? 'celsius')
   const petOption = options.pet === 'dog' ? 'dog' : 'cat'
+  // wellness nudges, in minutes of active work; 0 turns one off
+  const eyesMs = Math.max(0, Number(options.eyesMinutes ?? 20)) * 60_000
+  const waterMs = Math.max(0, Number(options.waterMinutes ?? 60)) * 60_000
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -387,8 +528,12 @@ export const register: Register = (on, options) => {
     $.clock.every(MINUTE_TICK_MS, () => {
       void refreshAgents($)
       void coachClock($)
+      void wellnessClock($, eyesMs, waterMs)
       $.ui.invalidate('ui.render')
     })
+    $.clock.every(GPU_POLL_MS, () => void pollGpu($))
+    void pollGpu($)
+    void scanOutputs($)
     $.clock.every(WEATHER_REFRESH_MS, () => void fetchWeather($, city, unit))
     return next(e)
   })
@@ -396,6 +541,7 @@ export const register: Register = (on, options) => {
   // None of these hold up the turn: the band's own work runs beside it.
 
   on('prompt.submit', ($, e, next) => {
+    activitySeen = true
     void rollQuote($)
     void update($, coach, c => (c.isReset ? { ...c, isReset: false } : c)).catch(() => {})
     void refresh($)
@@ -403,6 +549,7 @@ export const register: Register = (on, options) => {
   })
 
   on('turn.start', ($, e, next) => {
+    activitySeen = true
     inFlight = 0
     void refreshAgents($)
     void setPhase($, 'thinking')
@@ -413,6 +560,7 @@ export const register: Register = (on, options) => {
     // a subagent's calls run under the main loop's Agent call, which already
     // reads as working; counting them would outlive the turn for one in the background
     if (e.agentId) return next(e)
+    activitySeen = true
     inFlight += 1
     void setPhase($, 'working')
     try {
@@ -427,9 +575,11 @@ export const register: Register = (on, options) => {
     // every loop's turn counts toward the bill, subagents' included
     if (e.usage) void addSpend($, e.usage)
     if (!e.agentId) {
+      activitySeen = true
       inFlight = 0
       void setPhase($, 'idle')
       void refresh($)
+      void scanOutputs($)
     }
     return next(e)
   })
@@ -447,6 +597,23 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
+  on('ui.message', { element: 'fun' }, async ($, e, next) => {
+    const message = e.data as FunMessage | undefined
+    if (message && typeof message === 'object' && 'type' in message) void funClicked($, message)
+    return next(e)
+  })
+
+  // an effort typed by hand shows on the card too, for the model it was set on
+  on('command.run', { command: 'effort' }, async ($, e, next) => {
+    const result = await next(e)
+    const level = e.args.trim().toLowerCase()
+    if (EFFORT_LEVELS.includes(level)) {
+      const model = (await read($, snap))?.model ?? ''
+      void update($, effortChoice, () => ({ model, level })).catch(() => {})
+    }
+    return result
+  })
+
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
     void refresh($)
@@ -458,6 +625,13 @@ export const register: Register = (on, options) => {
 
     // `/context-bar pet dog`, `/context-bar pet cat`, or `/context-bar pet` to swap
     const words = arg.split(/\s+/)
+    if (words[0] === 'nudges') {
+      const isOn = words[1] !== 'off'
+      await $.store.set('nudges', isOn)
+      if (!isOn) await update($, wellness, w => ({ ...w, due: null }))
+      return { text: isOn ? 'Rocky will remind you to rest your eyes and drink water.' : 'No more wellness nudges, until /context-bar nudges on.' }
+    }
+
     if (words[0] === 'pet' || words[0] === 'dog' || words[0] === 'cat') {
       const asked = words[0] === 'pet' ? words[1] : words[0]
       const current = await read($, pet)
@@ -521,6 +695,13 @@ export const register: Register = (on, options) => {
     ])
     const current: Phase = e.props.isWorking ? (stored === 'idle' ? 'thinking' : stored) : 'idle'
     const mood = percentColor(s.percent)
+    const [gpuNow, cheers, wellnessNow, chosenEffort, newest] = await Promise.all([
+      read($, gpu),
+      read($, cheer),
+      read($, wellness),
+      read($, effortChoice),
+      read($, output),
+    ])
 
     // The fun column's data; it draws and animates itself.
     const sky = wx ? skyStyle(wx.code, wx.isDay) : null
@@ -529,7 +710,8 @@ export const register: Register = (on, options) => {
       layout: columns >= MIN_COLUMNS_FOR_SIDE ? 'side' : 'stack',
       pet: await read($, pet),
       model: s.model,
-      effort: s.effort,
+      // an effort set from the card or typed wins, while the same model is in use
+      effort: chosenEffort && chosenEffort.model === s.model ? chosenEffort.level : s.effort,
       session: sessionLength(now, s.startedAt),
       weather:
         wx && sky
@@ -542,6 +724,9 @@ export const register: Register = (on, options) => {
           : null,
       phase: current,
       percent: s.percent,
+      gpu: gpuNow,
+      nudge: wellnessNow.due,
+      cheer: cheers,
     }
 
     // Context: used rows, then the compaction buffer, then free space.
@@ -751,6 +936,18 @@ export const register: Register = (on, options) => {
           )}
           {/* the model sits under the weather in the fun column; with no fun column, here */}
           {!showFun && modelLine}
+          {newest && (
+            <Box {...bg} flexDirection="row" alignItems="center">
+              {label('OUTPUT')}
+              {t(PEACH, '▣ ')}
+              {t(TEXT, newest.name.length > 40 ? `${newest.name.slice(0, 37)}...` : newest.name, { bold: true })}
+              {t(MUTED, `  ${ago(now, newest.mtimeMs)}  `)}
+              <Box {...bg} marginRight={1}>
+                <Button key="open-output" label="Open" onPress={() => void openPath($, newest.path, false)} />
+              </Box>
+              <Button key="open-folder" label="Folder" onPress={() => void openPath($, newest.path, true)} />
+            </Box>
+          )}
           <Box {...bg} flexDirection="row" flexWrap="wrap" alignItems="center">
             {label('ASK')}
             {ACTIONS.map(([key, name, prompt]) => (

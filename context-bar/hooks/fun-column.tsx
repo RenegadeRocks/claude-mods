@@ -1,65 +1,139 @@
-// The fun column's surface module: signature, session, weather, the phase
-// animation and Rocky. It runs on the surface's own frame clock, so the cat
-// moves without the band redrawing, and it takes clicks itself: no Button,
-// so nothing lights up under the pointer.
+// The fun column's surface module: signature, session, weather, the model and
+// its effort (both clickable), the GPU while it works, the phase animation and
+// the pet. It runs on the surface's own frame clock, so the pet moves without
+// the band redrawing, and it takes clicks itself: no Button, so nothing lights
+// up under the pointer. What a click changes outside the column it posts to
+// the hooks module.
 
 import type { ClientModule } from 'claude-code'
 
-import type { FunProps } from '../types'
+import type { FunMessage, FunProps } from '../types'
 import { FRAME_MS, PET_NAME, REACTION_FRAMES, REACTIONS, petStage, petView, thinkingCells, workingCells } from './pet'
-import { BG, BLUE, MAUVE, MUTED, PINK, SIGNATURE_STOPS, TEAL, TEXT, TRACK, YELLOW, gradient, percentColor } from './theme'
+import {
+  BG,
+  BLUE,
+  LAVENDER,
+  MAUVE,
+  MUTED,
+  PINK,
+  SIGNATURE_STOPS,
+  TEAL,
+  TEXT,
+  TRACK,
+  YELLOW,
+  gradient,
+  percentColor,
+} from './theme'
 
 const SIGNATURE = 'RenegadeRocks'
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max']
+// the picker under the model name: [label, the /model alias it sends]
+const MODELS: [string, string][] = [
+  ['Sonnet', 'sonnet'],
+  ['Opus', 'opus'],
+  ['Fable', 'fable'],
+  ['Haiku', 'haiku'],
+]
+// the gap between the pet and its info rows, side by side
+const SIDE_GAP = 3
 
 type Local = {
   frame: number
   reaction: { kind: string; at: number } | null
   last: string
   isHovered: boolean
+  isPicking: boolean
+  cheered: number
 }
+
+const FRESH: Local = { frame: 0, reaction: null, last: '', isHovered: false, isPicking: false, cheered: 0 }
 
 const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
   const { Box, Text } = surface.elements
   if (surface.state === undefined) {
-    surface.setState({ frame: 0, reaction: null, last: '', isHovered: false })
+    surface.setState({ ...FRESH, cheered: props.cheer })
     surface.every(FRAME_MS, () => {
       const s = surface.state
       if (s) surface.setState({ ...s, frame: s.frame + 1 })
     })
   }
-  const local = surface.state ?? { frame: 0, reaction: null, last: '', isHovered: false }
+  const local = surface.state ?? { ...FRESH, cheered: props.cheer }
   const { frame } = local
+
+  // a GPU job that just finished: the pet celebrates
+  if (props.cheer > local.cheered) {
+    surface.setState({ ...local, cheered: props.cheer, reaction: { kind: 'sparkle', at: frame }, last: 'sparkle' })
+  }
 
   const mood = percentColor(props.percent)
   const stage = petStage(props.pet, props.percent)
   const reaction = local.reaction ? { kind: local.reaction.kind, t: frame - local.reaction.at } : null
-  const plate = local.isHovered
-    ? { text: `♥ pet ${PET_NAME}`, color: PINK }
-    : { text: `${PET_NAME} · ${stage.title}`, color: mood }
-  const view = petView(stage.lines, props.pet, props.phase, frame, props.percent >= 85, plate, reaction)
+  const plate = props.nudge
+    ? { text: 'click when done', color: PINK }
+    : local.isHovered
+      ? { text: `♥ pet ${PET_NAME}`, color: PINK }
+      : { text: `${PET_NAME} · ${stage.title}`, color: mood }
+  const view = petView(stage.lines, props.pet, props.phase, frame, props.percent >= 85, plate, reaction, props.nudge)
   const effortLevel = EFFORTS.indexOf(props.effort ?? '') + 1
   const anim = props.phase === 'thinking' ? thinkingCells(frame) : props.phase === 'working' ? workingCells(frame) : []
-  const label = props.phase
   const labelColor = props.phase === 'thinking' ? MAUVE : props.phase === 'working' ? YELLOW : MUTED
+  const model = props.model || 'Claude'
+  const showMeter = Boolean(props.effort) && props.showTagline
 
-  // Side by side, the pet takes the column's first cells on every row; stacked,
-  // it sits under the info rows: signature, session, weather (when known),
-  // model, phase.
+  // Where things sit, for the pointer. Side by side the info rows start right
+  // of the pet at the top; stacked they start at the column's top-left and the
+  // pet sits under them.
   const isSide = props.layout === 'side'
   const petWidth = view.pet[0]?.length ?? 16
-  const petTop = props.weather ? 5 : 4
+  const infoLeft = isSide ? petWidth + SIDE_GAP : 0
+  const modelRow = props.weather ? 3 : 2
+  const infoRows = modelRow + 1 + (local.isPicking ? 1 : 0) + (props.gpu ? 1 : 0) + 1
+  const nameStart = infoLeft + 2
+  const meterStart = nameStart + model.length + 1
+  const pickerSpots = MODELS.map(([name, alias], i) => {
+    const start = nameStart + MODELS.slice(0, i).reduce((w, [n]) => w + n.length + 2, 0)
+    return { start, end: start + name.length, alias }
+  })
+
+  const post = (message: FunMessage) => surface.post(message)
+
   surface.onPointer(e => {
     const s = surface.state
     if (!s) return
-    const isOverPet = e.type !== 'leave' && (isSide ? e.x < petWidth : e.y >= petTop)
-    if (e.type === 'down' && e.button === 'left' && isOverPet) {
-      let kind = s.last
-      while (kind === s.last) kind = REACTIONS[Math.floor(Math.random() * REACTIONS.length)] ?? 'hearts'
-      surface.setState({ ...s, reaction: { kind, at: s.frame }, last: kind })
-    } else if (isOverPet !== s.isHovered) {
-      surface.setState({ ...s, isHovered: isOverPet })
+    const isOverPet = e.type !== 'leave' && (isSide ? e.x < petWidth : e.y >= infoRows)
+    if (e.type === 'down' && e.button === 'left') {
+      if (isOverPet) {
+        if (props.nudge) {
+          post({ type: 'nudge-done' })
+          surface.setState({ ...s, reaction: { kind: 'hearts', at: s.frame }, last: 'hearts' })
+          return
+        }
+        let kind = s.last
+        while (kind === s.last) kind = REACTIONS[Math.floor(Math.random() * REACTIONS.length)] ?? 'hearts'
+        surface.setState({ ...s, reaction: { kind, at: s.frame }, last: kind })
+        return
+      }
+      if (e.y === modelRow && e.x >= nameStart && e.x < nameStart + model.length) {
+        surface.setState({ ...s, isPicking: !s.isPicking })
+        return
+      }
+      if (e.y === modelRow && showMeter && e.x >= meterStart && e.x < meterStart + EFFORTS.length) {
+        post({ type: 'effort', level: EFFORTS[e.x - meterStart] ?? 'high' })
+        return
+      }
+      if (e.y === modelRow && props.effort && !showMeter && e.x >= meterStart) {
+        // no meter in a narrow column: the effort word steps to the next level
+        post({ type: 'effort', level: EFFORTS[(EFFORTS.indexOf(props.effort) + 1) % EFFORTS.length] ?? 'high' })
+        return
+      }
+      const spot = s.isPicking && e.y === modelRow + 1 ? pickerSpots.find(p => e.x >= p.start && e.x < p.end) : undefined
+      if (spot) {
+        post({ type: 'model', alias: spot.alias })
+        surface.setState({ ...s, isPicking: false })
+      }
+      return
     }
+    if (isOverPet !== s.isHovered) surface.setState({ ...s, isHovered: isOverPet })
   })
   // a finished reaction is dropped, so the next click starts clean
   if (local.reaction && frame - local.reaction.at >= REACTION_FRAMES) {
@@ -71,8 +145,9 @@ const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
       {text}
     </Text>
   )
+  const isCurrent = (alias: string) => model.toLowerCase().startsWith(alias)
 
-  const infoRows = (
+  const info = (
     <Box flexDirection="column" backgroundColor={BG}>
       <Text backgroundColor={BG} wrap="truncate-end">
         {gradient(SIGNATURE, SIGNATURE_STOPS).map((c, i) => (
@@ -91,13 +166,13 @@ const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
         <Text backgroundColor={BG} wrap="truncate-end">
           {t(props.weather.color, `${props.weather.glyph} ${props.weather.word}`)}
           {t(props.weather.tempColor, ` ${props.weather.temp}`, { bold: true })}
-          {props.weather.place ? t('#b4befe', ` ${props.weather.place}`, { italic: true }) : null}
+          {props.weather.place ? t(LAVENDER, ` ${props.weather.place}`, { italic: true }) : null}
         </Text>
       )}
       <Text backgroundColor={BG} wrap="truncate-end">
         {t(BLUE, '◆ ')}
-        {t(TEXT, props.model || 'Claude', { bold: true })}
-        {props.effort && props.showTagline && (
+        {t(TEXT, model, { bold: true })}
+        {showMeter && (
           <Text backgroundColor={BG}>
             {t(MAUVE, ` ${'▰'.repeat(effortLevel)}`)}
             {t(TRACK, '▱'.repeat(EFFORTS.length - effortLevel))}
@@ -105,19 +180,38 @@ const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
         )}
         {props.effort ? t(MUTED, ` ${props.effort}`) : null}
       </Text>
+      {local.isPicking && (
+        <Text backgroundColor={BG} wrap="truncate-end">
+          {t(MUTED, '  ')}
+          {MODELS.map(([name, alias], i) => (
+            <Text key={alias} backgroundColor={BG} color={isCurrent(alias) ? BLUE : MUTED} bold={isCurrent(alias)}>
+              {name}
+              {i < MODELS.length - 1 ? '  ' : ''}
+            </Text>
+          ))}
+        </Text>
+      )}
+      {props.gpu && (
+        <Text backgroundColor={BG} wrap="truncate-end">
+          {t(YELLOW, '▦ GPU ')}
+          {t(percentColor(props.gpu.util), `${props.gpu.util}%`, { bold: true })}
+          {t(MUTED, ` ${props.gpu.memUsed}/${props.gpu.memTotal} GB`)}
+          {props.gpu.busyMinutes > 0 ? t(MUTED, ` · busy ${props.gpu.busyMinutes}m`) : null}
+        </Text>
+      )}
       <Text backgroundColor={BG}>
         {anim.map((c, i) => (
           <Text key={`a${i}`} backgroundColor={BG} color={c.color}>
             {c.ch}
           </Text>
         ))}
-        {t(labelColor, `${anim.length > 0 ? ' ' : ''}${label}`)}
+        {t(labelColor, `${anim.length > 0 ? ' ' : ''}${props.phase}`)}
       </Text>
     </Box>
   )
 
-  const petBlock = (
-    <Box key="pet" flexDirection="column" alignSelf="center" backgroundColor={BG}>
+  const pet = (
+    <Box key="pet" flexDirection="column" alignSelf={isSide ? 'flex-start' : 'center'} backgroundColor={BG}>
       {view.top.map((r, i) => (
         <Text key={`pt${i}`} backgroundColor={BG} color={r.color}>
           {r.text}
@@ -137,16 +231,16 @@ const FunColumn: ClientModule<FunProps, Local> = (props, surface) => {
   )
 
   return isSide ? (
-    <Box flexDirection="row" alignItems="center" backgroundColor={BG}>
-      {petBlock}
-      <Box marginLeft={3} backgroundColor={BG}>
-        {infoRows}
+    <Box flexDirection="row" alignItems="flex-start" backgroundColor={BG}>
+      {pet}
+      <Box marginLeft={SIDE_GAP} backgroundColor={BG}>
+        {info}
       </Box>
     </Box>
   ) : (
     <Box flexDirection="column" backgroundColor={BG}>
-      {infoRows}
-      {petBlock}
+      {info}
+      {pet}
     </Box>
   )
 }

@@ -16,6 +16,9 @@ let fiveHour: { percentUsed: number; resetsAt: string } = { percentUsed: 37, res
 const toasts: string[] = []
 const submitted: string[] = []
 const commands: string[] = []
+const processes: string[][] = []
+let gpuUtil: number | null = null
+let files: Record<string, { name: string; kind: 'file' | 'dir'; mtimeMs: number }[]> = {}
 
 const usage = {
   startedAt: NOON_UTC - (2 * 60 + 14) * 60_000,
@@ -71,6 +74,9 @@ function world(on: On, options: { agents?: unknown[]; store?: Record<string, unk
   toasts.length = 0
   submitted.length = 0
   commands.length = 0
+  processes.length = 0
+  gpuUtil = null
+  files = {}
   const clock = mock.clock(on, { now: NOON_UTC })
   mock.store(on, options.store ?? {})
   on('session.usage', () => ({ value: usage }) as never)
@@ -95,6 +101,23 @@ function world(on: On, options: { agents?: unknown[]; store?: Record<string, unk
   on('command.run', (_, e) => {
     commands.push(`/${e.command}${e.args ? ` ${e.args}` : ''}`)
     return { text: '' } as never
+  })
+  on('ui.message', () => ({}) as never)
+  on('session.root', () => ({ value: '/proj' }) as never)
+  // the engine hands the listing an absolute path: on Windows '/proj' arrives as 'C:\\proj'
+  on('fs.list', (_, e) => {
+    const key = e.path.replace(/\\/g, '/').replace(/^[A-Za-z]:/, '')
+    return { value: (files[key] ?? []).map(f => ({ ...f, size: 1, isLink: false })) } as never
+  })
+  mock.env(on, { OS: 'Windows_NT' })
+  on('process.run', (_, e) => {
+    processes.push([...e.argv])
+    if (e.argv[0] === 'nvidia-smi') {
+      if (gpuUtil === null) return { value: { exitCode: 1, stdout: '', stderr: 'no gpu' } } as never
+      return { value: { exitCode: 0, stdout: `${gpuUtil}, 18432, 32607
+`, stderr: '' } } as never
+    }
+    return { value: { exitCode: 0, stdout: '', stderr: '' } } as never
   })
   on('ui.toast', (_, e) => {
     toasts.push(e.text)
@@ -617,4 +640,102 @@ test('the ASK buttons send their prompts; Compact appears past 60% and runs /com
   await clock.settle()
   expect(commands).toContain('/compact')
   await full.unmount()
+})
+
+// stacked at 120 columns: signature, session, weather, then the model on row 3
+const MODEL_ROW = 3
+// "◆ " then "Sonnet 5.5", a space, then the five effort cells
+const NAME_X = 2
+const METER_X = NAME_X + 'Sonnet 5.5'.length + 1
+
+test('clicking the effort meter sets that effort; clicking the model opens a picker', async ($, on) => {
+  const clock = world(on)
+  await started($, clock)
+  const ui = await mountBand($)
+
+  // the second cell is medium
+  await ui.pointer({ type: 'down', x: METER_X + 1, y: MODEL_ROW, button: 'left' })
+  await clock.settle()
+  expect(commands).toContain('/effort medium')
+  await clock.settle()
+  expect(await funTextsOf(ui)).toContain(' medium')
+
+  // the model name opens the picker; Opus is right after "Sonnet" and two spaces
+  await ui.pointer({ type: 'down', x: NAME_X + 1, y: MODEL_ROW, button: 'left' })
+  expect((await funTextsOf(ui)).some(t => t.includes('Sonnet') && t.includes('Opus') && t.includes('Haiku'))).toBe(true)
+  await ui.pointer({ type: 'down', x: NAME_X + 'Sonnet'.length + 2 + 1, y: MODEL_ROW + 1, button: 'left' })
+  await clock.settle()
+  expect(commands).toContain('/model opus')
+  await ui.unmount()
+})
+
+test('after 20 active minutes Rocky asks you to rest your eyes; a click answers him', async ($, on) => {
+  const clock = world(on)
+  await started($, clock)
+  // keep working: a prompt every four minutes for 21 minutes
+  for (let i = 0; i < 6; i++) {
+    await $.prompt.submit({ text: `p${i}`, wait: false, origin: { kind: 'composer' } } as never)
+    await clock.advance(4 * 60_000)
+  }
+  expect(toasts.some(t => /rest your eyes/.test(t))).toBe(true)
+  const ui = await mountBand($)
+  expect((await funTextsOf(ui)).some(t => /rest your eyes/.test(t))).toBe(true)
+  expect((await funTextsOf(ui)).some(t => /click when done/.test(t))).toBe(true)
+
+  // the pet sits under the five info rows
+  await ui.pointer({ type: 'down', x: 10, y: 7, button: 'left' })
+  await clock.settle()
+  expect((await funTextsOf(ui)).some(t => /rest your eyes/.test(t))).toBe(false)
+  await ui.unmount()
+})
+
+test('a long break resets the nudges, and /context-bar nudges off silences them', async ($, on) => {
+  const clock = world(on)
+  await started($, clock)
+  await $.command.run({ command: 'context-bar', args: 'nudges off', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 100 } } as never)
+  for (let i = 0; i < 8; i++) {
+    await $.prompt.submit({ text: `p${i}`, wait: false, origin: { kind: 'composer' } } as never)
+    await clock.advance(4 * 60_000)
+  }
+  expect(toasts.some(t => /Rocky says/.test(t))).toBe(false)
+})
+
+test('render watch shows the GPU while it works and cheers when a job ends', async ($, on) => {
+  const clock = world(on)
+  gpuUtil = 92
+  await started($, clock)
+  await clock.advance(2 * 60_000)
+  let ui = await mountBand($)
+  expect((await funTextsOf(ui)).some(t => /▦ GPU 92% 18\/32 GB · busy 2m/.test(t))).toBe(true)
+  await ui.unmount()
+
+  gpuUtil = 3
+  await clock.advance(30_000)
+  expect(toasts.some(t => /GPU job finished after 2m/.test(t))).toBe(true)
+  ui = await mountBand($)
+  expect((await funTextsOf(ui)).some(t => /GPU/.test(t))).toBe(false)
+  await ui.unmount()
+})
+
+test('the newest image or video saved this session shows, with Open and Folder', async ($, on) => {
+  const clock = world(on)
+  files = {
+    '/proj': [
+      { name: 'renders', kind: 'dir', mtimeMs: 0 },
+      { name: 'old.png', kind: 'file', mtimeMs: NOON_UTC - 5 * 3_600_000 },
+    ],
+    '/proj/renders': [
+      { name: 'before.png', kind: 'file', mtimeMs: NOON_UTC - 60_000 },
+      { name: 'after_v3.mp4', kind: 'file', mtimeMs: NOON_UTC - 30_000 },
+    ],
+  }
+  await started($, clock)
+  const ui = await mountBand($)
+  expect(await ui.find({ type: 'Text', text: /^after_v3\.mp4$/ })).toBeDefined()
+  await ui.press({ key: 'open-output' })
+  await ui.press({ key: 'open-folder' })
+  await clock.settle()
+  expect(processes).toContainEqual(['cmd', '/c', 'start', '', '/proj/renders/after_v3.mp4'])
+  expect(processes).toContainEqual(['explorer', '/select,/proj/renders/after_v3.mp4'])
+  await ui.unmount()
 })

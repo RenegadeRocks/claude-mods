@@ -10,6 +10,14 @@ A Claude Code mod that puts a card above your prompt.
 
 **Buttons:** one click sends a prompt you'd otherwise type: **Recap** (what are we doing, what's done, what's next), **Update memory**, **Keep going**, and **Team update** (a short status to paste to your team). **Compact** appears once the context passes 60% and runs `/compact`.
 
+**Click to change model and effort:** click a cell of the effort meter under the weather to set that effort. Click the model name for a picker (Sonnet · Opus · Fable · Haiku).
+
+**Newest output:** the newest image or video saved under your project this session, with **Open** and **Folder** buttons.
+
+**Render watch:** while the GPU works (NVIDIA cards), a line shows its load, memory and how long it has been busy. When a job of a minute or more finishes, you get a note and the pet celebrates.
+
+**Wellness nudges:** after 20 minutes of active work the pet closes its eyes and asks you to rest yours; after 60 it asks for a water break. Click the pet when you've done it. Time away counts as a break, so sessions that run for days don't matter. Change the minutes in `/plugin configure`, or turn them off with `/context-bar nudges off`.
+
 ## Install
 
 In Claude Code, type:
@@ -28,6 +36,7 @@ Press `y` to add the marketplace, then pick the **user** scope so it shows in ev
 | `/context-bar on` | Shows it again |
 | `/context-bar pet dog` | Rocky becomes a dog (remembered) |
 | `/context-bar pet cat` | Rocky becomes a cat (remembered) |
+| `/context-bar nudges off` | No more eye and water nudges (remembered); `nudges on` brings them back |
 
 ## Settings
 
@@ -36,6 +45,7 @@ Run `/plugin configure context-bar@renegaderocks` to change these:
 - **Weather city:** Ludhiana by default. Leave it empty to use your approximate location from your IP address.
 - **Temperature unit:** Celsius or Fahrenheit.
 - **Pet:** cat or dog.
+- **Rest-your-eyes reminder** and **Water reminder:** minutes of active work between nudges; 0 turns one off.
 
 ## Good to know
 

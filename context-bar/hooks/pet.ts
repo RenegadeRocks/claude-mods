@@ -2,7 +2,7 @@
 // drawn by the fun column's surface module on its own frame clock.
 
 import type { Phase } from '../types'
-import { GREEN, LAVENDER, MAUVE, MUTED, PINK, TEAL, TRACK, YELLOW } from './theme'
+import { GREEN, LAVENDER, MAUVE, MUTED, PINK, SKY, TEAL, TRACK, YELLOW } from './theme'
 import type { Cell } from './theme'
 
 export const FRAME_MS = 140
@@ -176,8 +176,15 @@ export function petView(
   stressed: boolean,
   plate: Row,
   reaction: { kind: string; t: number } | null,
+  nudge: 'eyes' | 'water' | null = null,
 ): PetView {
   const pose = poseFor(phase, frame, stressed)
+  // a wellness nudge takes over the pose until the pet is clicked
+  if (nudge === 'eyes') Object.assign(pose, { face: '-.-', top: 'rest your eyes', topColor: LAVENDER })
+  if (nudge === 'water') {
+    const sip = Math.floor(frame / BEAT) % 2
+    Object.assign(pose, { face: sip ? '^o^' : '^.^', top: 'water break?', topColor: SKY, prop: 'c[_]', propColor: SKY })
+  }
   const width = Math.max(14, ...template.map(l => l.length)) + 2
   const fit = (l: string) => centreIn(l, width)
   const row = (text: string, color: string): Row => ({ text: fit(text), color })

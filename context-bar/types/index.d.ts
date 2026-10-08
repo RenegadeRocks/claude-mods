@@ -69,6 +69,18 @@ export type Weather = {
   isDay: boolean
 }
 
+/** The GPU while it works: load, memory in GB, and minutes busy (0 when only warm). */
+export type Gpu = { util: number; memUsed: number; memTotal: number; busyMinutes: number }
+
+/** A wellness nudge Rocky is giving: rest your eyes, or drink some water. */
+export type Nudge = 'eyes' | 'water'
+
+/** Active time and when each nudge was last answered, in active milliseconds. */
+export type Wellness = { activeMs: number; eyesAt: number; waterAt: number; due: Nudge | null }
+
+/** The newest image or video saved under the project this session. */
+export type Output = { path: string; name: string; mtimeMs: number }
+
 /** What the fun column's surface module draws from; plain data. */
 export type FunProps = {
   showTagline: boolean
@@ -82,7 +94,19 @@ export type FunProps = {
   weather: { glyph: string; word: string; color: string; temp: string; tempColor: string; place: string } | null
   phase: Phase
   percent: number
+  /** The GPU's line, while it works; null when idle or absent. */
+  gpu: Gpu | null
+  /** The nudge to show, until the pet is clicked. */
+  nudge: Nudge | null
+  /** Goes up by one when a GPU job finishes, so the pet celebrates. */
+  cheer: number
 }
+
+/** What the fun column posts to the hooks module when it is clicked. */
+export type FunMessage =
+  | { type: 'effort'; level: string }
+  | { type: 'model'; alias: string }
+  | { type: 'nudge-done' }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -96,6 +120,12 @@ declare module 'claude-code' {
       spend: Spend
       pet: 'cat' | 'dog'
       coach: Coach
+      gpu: Gpu | null
+      cheer: number
+      wellness: Wellness
+      output: Output | null
+      /** An effort chosen from the card or typed, for the model it was set on. */
+      effortChoice: { model: string; level: string } | null
     }
   }
 }
