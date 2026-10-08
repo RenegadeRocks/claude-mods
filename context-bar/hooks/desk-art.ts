@@ -1,12 +1,12 @@
 // The desk scene, painted as pixels: each character cell shows two stacked
 // pixels with the half block '▀' (top pixel as its colour, bottom as its
 // background), which doubles the height's detail. The wall clock is a small
-// orange digital clock, its face a row of text so the time stays sharp. Pure: the same inputs paint the same
+// orange neon clock in a thin double-line frame, drawn as text so it stays sharp. Pure: the same inputs paint the same
 // scene, so the surface module just lays out what this returns.
 
 import type { Ambient, Pomodoro } from '../types'
 
-export type DeskCell = { ch: string; fg: string; bg: string }
+export type DeskCell = { ch: string; fg: string; bg: string; bold?: boolean }
 
 export const DESK_WIDTH = 44
 // six rows of wall and one of desk top (14 pixels), then the notebook strip and the drawer
@@ -16,11 +16,13 @@ export const DRAWER_ROW = 8
 
 const PX_HEIGHT = SCENE_ROWS * 2
 // the wall clock: a small rounded case (cells x0..x1, pixels y0..y1), its face one row of text
-const CLOCK = { x0: 15, x1: 23, y0: 1, y1: 4, faceRow: 1 }
-const CLOCK_RIM = '#ff9a3c'
-const CLOCK_FACE = '#1a1220'
-const CLOCK_DIGITS = '#ffa53d'
-const CLOCK_GLOW = '#ff8c2a'
+// the wall clock, in cells: a thin double-line frame around one row of orange neon digits
+const CLOCK = { x0: 15, x1: 23, top: 0, bottom: 2 }
+const CLOCK_FRAME = '#ffa04a'
+const CLOCK_FACE = '#1f0f0a'
+const CLOCK_DIGITS = '#ffc472'
+const CLOCK_COLON_DIM = '#7a3d18'
+const CLOCK_GLOW = '#ff7a1a'
 // the lamp's bulb, in pixels; its warm light falls around it
 const BULB = { x: 36, y: 6 }
 
@@ -111,18 +113,12 @@ function paintPixels(frame: number, ambient: Ambient, isLampOn: boolean, sky: nu
     if (column && y >= 0 && y < PX_HEIGHT) column[y] = lit ? mix(c, '#f6c177', glowAt(x, y, power) * 0.6) : c
   }
 
-  // the clock's orange glow on the wall, then its glowing rim with rounded corners
-  for (let x = CLOCK.x0 - 4; x <= CLOCK.x1 + 4; x++) {
-    for (let y = 0; y <= CLOCK.y1 + 3; y++) {
-      const d = Math.hypot((x - (CLOCK.x0 + CLOCK.x1) / 2) / 7, (y - 2.5) / 3.2)
+  // the neon clock's orange glow, spilling onto the wall around it
+  for (let x = CLOCK.x0 - 6; x <= CLOCK.x1 + 6; x++) {
+    for (let y = 0; y <= 9; y++) {
+      const d = Math.hypot((x - (CLOCK.x0 + CLOCK.x1) / 2) / 10, (y - 2.5) / 5)
       const column = px[x]
-      if (column && d < 1) column[y] = mix(column[y] ?? '#1b1828', CLOCK_GLOW, 0.34 * (1 - d) ** 1.4)
-    }
-  }
-  for (let x = CLOCK.x0; x <= CLOCK.x1; x++) {
-    for (let y = CLOCK.y0; y <= CLOCK.y1; y++) {
-      const isCorner = (x === CLOCK.x0 || x === CLOCK.x1) && (y === CLOCK.y0 || y === CLOCK.y1)
-      if (!isCorner) put(x, y, CLOCK_RIM, false)
+      if (column && d < 1) column[y] = mix(column[y] ?? '#1b1828', CLOCK_GLOW, 0.55 * (1 - d) ** 1.3)
     }
   }
 
@@ -219,28 +215,41 @@ function paintPixels(frame: number, ambient: Ambient, isLampOn: boolean, sky: nu
   return px
 }
 
-/** The clock's face: the time in 12-hour digits, the colon blinking each second. */
+/** The clock's face: the time in 12-hour digits, centred in the frame. */
 function clockFace(now: Date): string {
   const hours = now.getHours() % 12 || 12
-  const colon = now.getSeconds() % 2 === 0 ? ':' : ' '
-  return ` ${String(hours).padStart(2, ' ')}${colon}${String(now.getMinutes()).padStart(2, '0')} `
+  const time = `${hours}:${String(now.getMinutes()).padStart(2, '0')}`
+  const room = CLOCK.x1 - CLOCK.x0 - 1
+  const left = Math.floor((room - time.length) / 2)
+  return ' '.repeat(left) + time + ' '.repeat(room - left - time.length)
+}
+
+/** The clock's cell at (cx, cy), or null where the scene shows through. */
+function clockCell(cx: number, cy: number, now: Date, wall: string): DeskCell | null {
+  if (cx < CLOCK.x0 || cx > CLOCK.x1 || cy < CLOCK.top || cy > CLOCK.bottom) return null
+  const isLeft = cx === CLOCK.x0
+  const isRight = cx === CLOCK.x1
+  if (cy === CLOCK.top) return { ch: isLeft ? '╔' : isRight ? '╗' : '═', fg: CLOCK_FRAME, bg: wall }
+  if (cy === CLOCK.bottom) return { ch: isLeft ? '╚' : isRight ? '╝' : '═', fg: CLOCK_FRAME, bg: wall }
+  if (isLeft || isRight) return { ch: '║', fg: CLOCK_FRAME, bg: wall }
+  // the digits glow; the colon dims every other second
+  const ch = clockFace(now)[cx - CLOCK.x0 - 1] ?? ' '
+  const isDim = ch === ':' && now.getSeconds() % 2 === 1
+  return { ch, fg: isDim ? CLOCK_COLON_DIM : CLOCK_DIGITS, bg: CLOCK_FACE, bold: true }
 }
 
 /** The scene's cells, top to bottom: six rows of wall, one of desk top. */
 export function paintScene(frame: number, now: Date, ambient: Ambient, isLampOn: boolean, sky = 0): DeskCell[][] {
   const px = paintPixels(frame, ambient, isLampOn, sky)
-  const face = clockFace(now)
   const rows: DeskCell[][] = []
   for (let cy = 0; cy < SCENE_ROWS; cy++) {
     const row: DeskCell[] = []
     for (let cx = 0; cx < DESK_WIDTH; cx++) {
       const top = px[cx]?.[cy * 2] ?? '#1b1828'
       const bottom = px[cx]?.[cy * 2 + 1] ?? '#1b1828'
-      if (cy === CLOCK.faceRow && cx > CLOCK.x0 && cx < CLOCK.x1) {
-        row.push({ ch: face[cx - CLOCK.x0 - 1] ?? ' ', fg: CLOCK_DIGITS, bg: CLOCK_FACE })
-      } else {
-        row.push(top === bottom ? { ch: ' ', fg: top, bg: bottom } : { ch: '▀', fg: top, bg: bottom })
-      }
+      const clock = clockCell(cx, cy, now, mix(top, bottom, 0.5))
+      if (clock) row.push(clock)
+      else row.push(top === bottom ? { ch: ' ', fg: top, bg: bottom } : { ch: '▀', fg: top, bg: bottom })
     }
     rows.push(row)
   }
@@ -252,7 +261,7 @@ export function runs(row: DeskCell[]): DeskCell[] {
   const out: DeskCell[] = []
   for (const cell of row) {
     const last = out[out.length - 1]
-    if (last && last.fg === cell.fg && last.bg === cell.bg) last.ch += cell.ch
+    if (last && last.fg === cell.fg && last.bg === cell.bg && last.bold === cell.bold) last.ch += cell.ch
     else out.push({ ...cell })
   }
   return out

@@ -816,10 +816,12 @@ test("the notebook holds this project's goal, typed in place", async ($, on) => 
   await started($, clock)
   const ui = await mountBand($, { ...props, bodyColumns: 190 })
 
+  // a click opens the note; the keys typed go straight to it, Enter saves
   await ui.pointer({ type: 'down', x: 10, y: NOTE, button: 'left', in: 'desk' })
-  expect(await ui.find({ type: 'Input', in: 'desk' })).toBeDefined()
-
-  await ui.input({ key: 'goal', text: 'fix the fairy feet' })
+  expect((await deskTexts(ui)).some(t => /enter saves/.test(t))).toBe(true)
+  for (const key of ['f', 'i', 'x', ' ', 'the fairy feet', 'z', 'backspace']) await ui.key({ key, in: 'desk' })
+  expect((await deskTexts(ui)).some(t => /✎ fix the fairy feet▏/.test(t))).toBe(true)
+  await ui.key({ key: 'return', in: 'desk' })
   await clock.settle()
   expect((await deskTexts(ui)).some(t => /✎ fix the fairy feet/.test(t))).toBe(true)
   await ui.unmount()

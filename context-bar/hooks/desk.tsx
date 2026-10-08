@@ -15,6 +15,12 @@ const LAMP = { x0: 32, x1: 42, y0: 1, y1: 5 }
 // the drawer's two controls, by column
 const TIMER_END = 26
 const SOUND_START = DESK_WIDTH - 16
+// the notebook strip: its width inside the wood, the longest goal, and the hint shown while typing
+const NOTE_WIDTH = DESK_WIDTH - 2
+const MAX_GOAL = 120
+const SAVE_HINT = ' enter saves '
+// keys with a name rather than a character; none of them types into the note
+const NAMED_KEYS = new Set(['up', 'down', 'left', 'right', 'tab', 'delete', 'pageup', 'pagedown', 'home', 'end', 'escape'])
 
 const WOOD = '#5e3b28'
 const PAPER = '#efe6d2'
@@ -25,7 +31,7 @@ const TEAL = '#94e2d5'
 
 const SOUND_NAMES: Record<Ambient, string> = { off: 'sounds off', rain: 'rain', fire: 'fireplace', focus: 'deep focus' }
 
-type Local = { frame: number; baseNow: number; baseFrame: number; isEditing: boolean; isLampOn: boolean }
+type Local = { frame: number; baseNow: number; baseFrame: number; isEditing: boolean; draft: string; isLampOn: boolean }
 
 function clockText(ms: number): string {
   const total = Math.max(0, Math.ceil(ms / 1000))
@@ -33,8 +39,8 @@ function clockText(ms: number): string {
 }
 
 const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
-  const { Box, Input, Text } = surface.elements
-  const fresh: Local = { frame: 0, baseNow: props.now, baseFrame: 0, isEditing: false, isLampOn: true }
+  const { Box, Text } = surface.elements
+  const fresh: Local = { frame: 0, baseNow: props.now, baseFrame: 0, isEditing: false, draft: '', isLampOn: true }
   if (surface.state === undefined) {
     surface.setState(fresh)
     surface.every(FRAME_MS, () => {
@@ -49,18 +55,36 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
   const now = isNewTime ? props.now : props.now + (local.frame - local.baseFrame) * FRAME_MS
 
   const post = (message: DeskMessage) => surface.post(message)
+  const saveGoal = (s: Local) => {
+    post({ type: 'goal', text: s.draft })
+    surface.setState({ ...s, isEditing: false })
+  }
 
   surface.onPointer(e => {
     const s = surface.state
     if (!s || e.type !== 'down' || e.button !== 'left') return
     if (e.y === NOTE_ROW) {
-      surface.setState({ ...s, isEditing: true })
+      // the click gives the desk the keyboard; a second click saves
+      if (s.isEditing) saveGoal(s)
+      else surface.setState({ ...s, isEditing: true, draft: props.goal.trim() })
     } else if (e.y === DRAWER_ROW && e.x < TIMER_END) {
       post({ type: 'pomodoro' })
     } else if (e.y === DRAWER_ROW && e.x >= SOUND_START) {
       post({ type: 'ambient' })
     } else if (e.x >= LAMP.x0 && e.x <= LAMP.x1 && e.y >= LAMP.y0 && e.y <= LAMP.y1) {
       surface.setState({ ...s, isLampOn: !s.isLampOn })
+    }
+  })
+
+  // while the note is open, typing goes into it: Enter saves, Backspace erases
+  surface.onKey(e => {
+    const s = surface.state
+    if (!s?.isEditing || e.ctrl || e.meta) return
+    if (e.key === 'return') saveGoal(s)
+    else if (e.key === 'backspace') surface.setState({ ...s, draft: s.draft.slice(0, -1) })
+    else if (!NAMED_KEYS.has(e.key)) {
+      const typed = e.key === 'space' ? ' ' : e.key.replace(/[\r\n\t]+/g, ' ')
+      surface.setState({ ...s, draft: (s.draft + typed).slice(0, MAX_GOAL) })
     }
   })
 
@@ -77,41 +101,41 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
   const drawer = ` ${timer}`.padEnd(SOUND_START).slice(0, SOUND_START) + sound.padStart(DESK_WIDTH - SOUND_START - 1) + ' '
 
   const goal = props.goal.trim()
-  const note = ` ✎ ${goal || "click to write today's goal"}`.padEnd(DESK_WIDTH - 2).slice(0, DESK_WIDTH - 2)
+  // while typing, the end of the draft stays in view, with a blinking caret
+  const room = NOTE_WIDTH - 3 - 1 - SAVE_HINT.length
+  const caret = local.frame % 4 < 2 ? '▏' : ' '
+  const typing = ` ✎ ${local.draft.slice(-room)}${caret}`.padEnd(NOTE_WIDTH - SAVE_HINT.length)
+  const note = ` ✎ ${goal || "click to write today's goal"}`.padEnd(NOTE_WIDTH).slice(0, NOTE_WIDTH)
 
   return (
     <Box flexDirection="column" backgroundColor={WOOD}>
       {scene.map((row, y) => (
         <Text key={`r${y}`} backgroundColor={WOOD}>
           {runs(row).map((cell, i) => (
-            <Text key={`c${i}`} color={cell.fg} backgroundColor={cell.bg}>
+            <Text key={`c${i}`} color={cell.fg} backgroundColor={cell.bg} bold={cell.bold}>
               {cell.ch}
             </Text>
           ))}
         </Text>
       ))}
-      {local.isEditing ? (
-        <Input
-          key="goal"
-          value={goal}
-          placeholder="today's goal"
-          submitLabel="save"
-          autoFocus
-          onSubmit={text => {
-            post({ type: 'goal', text })
-            const s = surface.state
-            if (s) surface.setState({ ...s, isEditing: false })
-          }}
-        />
-      ) : (
-        <Text backgroundColor={WOOD}>
-          <Text backgroundColor={WOOD}> </Text>
+      <Text backgroundColor={WOOD}>
+        <Text backgroundColor={WOOD}> </Text>
+        {local.isEditing ? (
+          <Text backgroundColor={PAPER}>
+            <Text backgroundColor={PAPER} color={INK}>
+              {typing}
+            </Text>
+            <Text backgroundColor={PAPER} color={FADED_INK} italic>
+              {SAVE_HINT}
+            </Text>
+          </Text>
+        ) : (
           <Text backgroundColor={PAPER} color={goal ? INK : FADED_INK} italic={!goal}>
             {note}
           </Text>
-          <Text backgroundColor={WOOD}> </Text>
-        </Text>
-      )}
+        )}
+        <Text backgroundColor={WOOD}> </Text>
+      </Text>
       <Text backgroundColor={WOOD}>
         <Text backgroundColor={WOOD} color={BRASS}>
           {drawer.slice(0, SOUND_START)}
