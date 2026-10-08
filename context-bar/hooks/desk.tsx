@@ -29,7 +29,7 @@ const FADED_INK = '#8a8296'
 const BRASS = '#f9e2af'
 const TEAL = '#94e2d5'
 
-const SOUND_NAMES: Record<Ambient, string> = { off: 'sounds off', rain: 'rain', fire: 'fireplace', focus: 'deep focus' }
+const SOUND_NAMES: Record<Ambient, string> = { off: 'sounds off', rain: 'rain', storm: 'thunderstorm', fire: 'fireplace', focus: 'deep focus' }
 
 type Local = { frame: number; baseNow: number; baseFrame: number; isEditing: boolean; draft: string; isLampOn: boolean }
 

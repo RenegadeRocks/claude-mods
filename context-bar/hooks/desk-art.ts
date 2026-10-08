@@ -63,6 +63,18 @@ function skyAt(sky: number, y: number): string {
   return mix(mix(lo[1], hi[1], t), mix(lo[2], hi[2], t), y)
 }
 
+/**
+ * How bright the lightning is on this frame, 0 to 1: a strike every 18 s or
+ * so with a fainter flicker after it, and a smaller one between them.
+ */
+function lightningAt(frame: number): number {
+  const big = frame % 73
+  if (big === 0) return 0.8
+  if (big === 2) return 0.45
+  const small = frame % 131
+  return small === 0 ? 0.4 : 0
+}
+
 type Rgb = [number, number, number]
 
 function rgb(hex: string): Rgb {
@@ -123,7 +135,7 @@ function paintPixels(frame: number, ambient: Ambient, isLampOn: boolean, sky: nu
   }
 
   // the window: a frame, night sky, the moon, stars or rain, and a sill
-  const raining = ambient === 'rain'
+  const raining = ambient === 'rain' || ambient === 'storm'
   for (let x = 1; x <= 12; x++) {
     for (let y = 1; y <= 10; y++) {
       const isFrame = x === 1 || x === 12 || y === 1 || y === 10 || x === 6 || y === 5
@@ -167,6 +179,16 @@ function paintPixels(frame: number, ambient: Ambient, isLampOn: boolean, sky: nu
       const y = 2 + drop
       if (y <= 9 && y !== 5) put(x, y, '#7aa2d8', false)
       if (y - 1 >= 2 && y - 1 <= 9 && y - 1 !== 5) put(x, y - 1, '#3c5a8c', false)
+    }
+    // in a storm, lightning: a flash with a flicker after it, a bolt on the brightest frame
+    const flash = ambient === 'storm' ? lightningAt(frame) : 0
+    if (flash > 0) {
+      for (let x = 2; x <= 11; x++) for (let y = 2; y <= 9; y++) if (isGlass(x, y)) put(x, y, mix(glassAt(x, y), '#dfe8ff', flash), false)
+      if (flash > 0.6) for (const [x, y] of [[9, 2], [8, 3], [9, 4], [8, 6], [7, 7]] as [number, number][]) put(x, y, '#ffffff', false)
+      // the room lights up for an instant too
+      px.forEach((column, x) => {
+        for (let y = 0; y < 12; y++) if (!isGlass(x, y)) column[y] = mix(column[y] ?? '#1b1828', '#c8d4ff', 0.18 * flash)
+      })
     }
   }
   for (let x = 0; x <= 13; x++) put(x, 11, '#4b405f')

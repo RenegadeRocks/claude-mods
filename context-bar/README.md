@@ -24,7 +24,7 @@ A Claude Code mod that puts a card above your prompt.
 
 - **Notebook:** click the paper strip and type this project's goal; it's there again next time you open the project.
 - **Focus timer:** click "start a 25-min focus" for a Pomodoro: 25 minutes of focus, a bell, then a 5-minute break. The dots count your rounds.
-- **Ambient sound:** click the sound on the right to step through rain, fireplace, deep focus and off. Rain falls on the window and the lamp flickers by the fire. Your choice carries over to the next session.
+- **Ambient sound:** click the sound on the right to step through rain, thunderstorm, fireplace, deep focus and off. Rain falls on the window, lightning flashes in the storm, and the lamp flickers by the fire. Your choice carries over to the next session.
 
 ## Install
 

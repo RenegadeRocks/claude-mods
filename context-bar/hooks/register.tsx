@@ -111,7 +111,7 @@ const GPU_POLL_MS = 5000
 // an alert the pet is giving chimes again this often until it is clicked
 const REMIND_MS = 5 * 60_000
 // the order the desk's sound button steps through
-const AMBIENTS: Ambient[] = ['off', 'rain', 'fire', 'focus']
+const AMBIENTS: Ambient[] = ['off', 'rain', 'storm', 'fire', 'focus']
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 // newest-output search: these kinds of file, this deep, skipping these folders
 const MEDIA = /\.(png|jpe?g|webp|gif|mp4|mov|webm|mkv|avi)$/i
@@ -733,7 +733,7 @@ export const register: Register = (on, options) => {
     void scanOutputs($)
     void loadGoal($)
     const sound = await $.store.get('ambient')
-    if (sound === 'rain' || sound === 'fire' || sound === 'focus') {
+    if (sound === 'rain' || sound === 'storm' || sound === 'fire' || sound === 'focus') {
       await update($, ambient, () => sound)
       void playAmbient($, sound)
     }

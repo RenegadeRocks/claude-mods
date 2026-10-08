@@ -851,7 +851,7 @@ test('the focus timer runs 25 minutes, rings, then a 5-minute break', async ($, 
   await rest.unmount()
 })
 
-test('the sound button steps through rain, fireplace and deep focus, and plays them', async ($, on) => {
+test('the sound button steps through rain, thunderstorm, fireplace and deep focus, and plays them', async ($, on) => {
   const clock = world(on)
   await started($, clock)
   const ui = await mountBand($, { ...props, bodyColumns: 190 })
@@ -860,6 +860,10 @@ test('the sound button steps through rain, fireplace and deep focus, and plays t
   await click()
   await clock.settle()
   expect((await deskTexts(ui)).some(t => /♪ rain/.test(t))).toBe(true)
+
+  await click()
+  await clock.settle()
+  expect((await deskTexts(ui)).some(t => /♪ thunderstorm/.test(t))).toBe(true)
 
   await click()
   await clock.settle()
