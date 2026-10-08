@@ -20,7 +20,7 @@ import type {
   Spend,
   Weather,
 } from '../types'
-import { DESK_WIDTH } from './desk-art'
+import { BREAK_MS, DESK_WIDTH, FOCUS_MS } from './desk-art'
 import { NO_COACH, coachStep, coachTick, etaText, minutesToFull } from './coach'
 import { NO_TRACK, gpuStep, parseSmi } from './gpu'
 import { NO_WELLNESS, NUDGE_TOASTS, wellnessDone, wellnessTick } from './wellness'
@@ -110,9 +110,7 @@ const MINUTE_TICK_MS = 10_000
 const GPU_POLL_MS = 5000
 // an alert the pet is giving chimes again this often until it is clicked
 const REMIND_MS = 5 * 60_000
-// the desk's focus timer, and the order its sound button steps through
-const FOCUS_MS = 25 * 60_000
-const BREAK_MS = 5 * 60_000
+// the order the desk's sound button steps through
 const AMBIENTS: Ambient[] = ['off', 'rain', 'fire', 'focus']
 const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 // newest-output search: these kinds of file, this deep, skipping these folders

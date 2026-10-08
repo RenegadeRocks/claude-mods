@@ -7,7 +7,7 @@
 import type { ClientModule } from 'claude-code'
 
 import type { Ambient, DeskMessage, DeskProps } from '../types'
-import { DESK_WIDTH, DRAWER_ROW, NOTE_ROW, paintScene, runs } from './desk-art'
+import { DESK_WIDTH, DRAWER_ROW, NOTE_ROW, paintScene, runs, skyFor } from './desk-art'
 
 const FRAME_MS = 250
 // the lamp, in cells: a click on it switches it off and on
@@ -64,7 +64,8 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
     }
   })
 
-  const scene = paintScene(local.frame, new Date(now), props.ambient, local.isLampOn)
+  // the window's sky follows the focus timer: dawn as you focus, morning on the break
+  const scene = paintScene(local.frame, new Date(now), props.ambient, local.isLampOn, skyFor(props.pomodoro, now))
 
   // the drawer: the focus timer on the left, the ambient sound on the right
   const { phase, endsAt, rounds } = props.pomodoro

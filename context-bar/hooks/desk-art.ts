@@ -4,7 +4,7 @@
 // orange digital clock, its face a row of text so the time stays sharp. Pure: the same inputs paint the same
 // scene, so the surface module just lays out what this returns.
 
-import type { Ambient } from '../types'
+import type { Ambient, Pomodoro } from '../types'
 
 export type DeskCell = { ch: string; fg: string; bg: string }
 
@@ -17,12 +17,49 @@ export const DRAWER_ROW = 8
 const PX_HEIGHT = SCENE_ROWS * 2
 // the wall clock: a small rounded case (cells x0..x1, pixels y0..y1), its face one row of text
 const CLOCK = { x0: 15, x1: 23, y0: 1, y1: 4, faceRow: 1 }
-const CLOCK_CASE = '#3b3149'
+const CLOCK_RIM = '#ff9a3c'
 const CLOCK_FACE = '#1a1220'
 const CLOCK_DIGITS = '#ffa53d'
 const CLOCK_GLOW = '#ff8c2a'
 // the lamp's bulb, in pixels; its warm light falls around it
 const BULB = { x: 36, y: 6 }
+
+// the focus timer's rounds; the window's sky follows them
+export const FOCUS_MS = 25 * 60_000
+export const BREAK_MS = 5 * 60_000
+// the break's last stretch, when the morning sets back into night
+const DUSK_MS = 90_000
+
+// the sky's colours, top and bottom of the window, from night (0) through sunrise (1) to morning (1.3)
+const SKY_STOPS: [number, string, string][] = [
+  [0, '#0d1430', '#22345e'],
+  [0.4, '#1c2252', '#4e3f78'],
+  [0.7, '#34407e', '#d98aa0'],
+  [1, '#5b86c9', '#ffc58a'],
+  [1.3, '#86b3e3', '#ffe0a6'],
+]
+const MORNING = 1.3
+
+/**
+ * How far the day has come, from the focus timer: night while idle, night
+ * to sunrise over a focus round, golden morning on the break, and back to
+ * night as the break ends.
+ */
+export function skyFor(pomodoro: Pomodoro, now: number): number {
+  const { phase, endsAt } = pomodoro
+  if (phase === 'idle' || endsAt === null) return 0
+  const left = Math.max(0, endsAt - now)
+  if (phase === 'focus') return Math.min(1, Math.max(0, 1 - left / FOCUS_MS))
+  return left < DUSK_MS ? (MORNING * left) / DUSK_MS : MORNING
+}
+
+function skyAt(sky: number, y: number): string {
+  const i = SKY_STOPS.findIndex(([at]) => at >= sky)
+  const hi = SKY_STOPS[Math.max(0, i === -1 ? SKY_STOPS.length - 1 : i)] ?? SKY_STOPS[0]!
+  const lo = SKY_STOPS[Math.max(0, (i === -1 ? SKY_STOPS.length : i) - 1)] ?? hi
+  const t = hi[0] === lo[0] ? 0 : (sky - lo[0]) / (hi[0] - lo[0])
+  return mix(mix(lo[1], hi[1], t), mix(lo[2], hi[2], t), y)
+}
 
 type Rgb = [number, number, number]
 
@@ -49,16 +86,18 @@ function glowAt(x: number, y: number, power: number): number {
  * Paints the wall, window, plant, mug and lamp into a pixel grid
  * [x][y] of DESK_WIDTH × PX_HEIGHT colours.
  */
-function paintPixels(frame: number, ambient: Ambient, isLampOn: boolean): string[][] {
+function paintPixels(frame: number, ambient: Ambient, isLampOn: boolean, sky: number): string[][] {
   // the lamp breathes a little; by the fire it flickers
   const flicker = ambient === 'fire' ? 0.85 + 0.15 * Math.sin(frame * 1.7) * Math.sin(frame * 0.6) : 1
-  const power = isLampOn ? 0.5 * flicker : 0
+  // by morning the lamp matters less, and daylight warms the wall
+  const daylight = Math.min(1, Math.max(0, (sky - 0.5) / 0.8))
+  const power = isLampOn ? 0.5 * flicker * (1 - 0.5 * daylight) : 0
   const px: string[][] = []
   for (let x = 0; x < DESK_WIDTH; x++) {
     const column: string[] = []
     for (let y = 0; y < PX_HEIGHT; y++) {
       let c: string
-      if (y < 12) c = mix('#1b1828', '#2a2340', y / 11)
+      if (y < 12) c = mix(mix('#1b1828', '#2a2340', y / 11), '#5a4560', 0.4 * daylight)
       else if (y === 12) c = '#a8724c'
       else c = '#7d5136'
       // a soft grain along the desk top
@@ -72,18 +111,18 @@ function paintPixels(frame: number, ambient: Ambient, isLampOn: boolean): string
     if (column && y >= 0 && y < PX_HEIGHT) column[y] = lit ? mix(c, '#f6c177', glowAt(x, y, power) * 0.6) : c
   }
 
-  // the clock's orange glow on the wall, then its case with rounded corners
+  // the clock's orange glow on the wall, then its glowing rim with rounded corners
   for (let x = CLOCK.x0 - 4; x <= CLOCK.x1 + 4; x++) {
     for (let y = 0; y <= CLOCK.y1 + 3; y++) {
       const d = Math.hypot((x - (CLOCK.x0 + CLOCK.x1) / 2) / 7, (y - 2.5) / 3.2)
       const column = px[x]
-      if (column && d < 1) column[y] = mix(column[y] ?? '#1b1828', CLOCK_GLOW, 0.22 * (1 - d) ** 1.5)
+      if (column && d < 1) column[y] = mix(column[y] ?? '#1b1828', CLOCK_GLOW, 0.34 * (1 - d) ** 1.4)
     }
   }
   for (let x = CLOCK.x0; x <= CLOCK.x1; x++) {
     for (let y = CLOCK.y0; y <= CLOCK.y1; y++) {
       const isCorner = (x === CLOCK.x0 || x === CLOCK.x1) && (y === CLOCK.y0 || y === CLOCK.y1)
-      if (!isCorner) put(x, y, CLOCK_CASE, false)
+      if (!isCorner) put(x, y, CLOCK_RIM, false)
     }
   }
 
@@ -92,19 +131,39 @@ function paintPixels(frame: number, ambient: Ambient, isLampOn: boolean): string
   for (let x = 1; x <= 12; x++) {
     for (let y = 1; y <= 10; y++) {
       const isFrame = x === 1 || x === 12 || y === 1 || y === 10 || x === 6 || y === 5
-      put(x, y, isFrame ? '#3d3453' : mix(raining ? '#0b0f1f' : '#0d1430', raining ? '#18213a' : '#22345e', (y - 2) / 7), false)
+      const clear = skyAt(sky, (y - 2) / 7)
+      put(x, y, isFrame ? '#3d3453' : raining ? mix(clear, '#2a3146', 0.6) : clear, false)
     }
   }
+  const isGlass = (x: number, y: number) => x >= 2 && x <= 11 && y >= 2 && y <= 9 && x !== 6 && y !== 5
+  const glassAt = (x: number, y: number) => px[x]?.[y] ?? '#0d1430'
   if (!raining) {
-    put(9, 2, '#f9e2af', false)
-    put(10, 2, '#f9e2af', false)
-    put(9, 3, '#f4d58d', false)
-    put(10, 3, '#fbe7b5', false)
+    // the moon sinks and fades as the sky lightens; the stars go first
+    const moonFade = Math.min(1, sky / 0.7)
+    const moonDrop = Math.round(sky * 3)
+    const moon: [number, number, string][] = [[9, 2, '#f9e2af'], [10, 2, '#f9e2af'], [9, 3, '#f4d58d'], [10, 3, '#fbe7b5']]
+    for (const [x, y, c] of moon) {
+      const my = y + moonDrop
+      if (moonFade < 1 && isGlass(x, my)) put(x, my, mix(c, glassAt(x, my), moonFade), false)
+    }
     const stars: [number, number][] = [[3, 2], [4, 4], [8, 7], [3, 7], [10, 8], [7, 3], [4, 9]]
     stars.forEach(([x, y], i) => {
       const twinkle = (Math.floor(frame / 5) + i * 2) % 5
-      if (twinkle !== 0) put(x, y, twinkle === 2 ? '#ffffff' : '#9aa6d6', false)
+      if (twinkle !== 0 && sky < 0.5) put(x, y, mix(twinkle === 2 ? '#ffffff' : '#9aa6d6', glassAt(x, y), sky / 0.5), false)
     })
+    // the sun climbs from behind the sill, with a soft halo
+    if (sky > 0.55) {
+      const sunY = 10.5 - ((sky - 0.55) / (MORNING - 0.55)) * 7
+      const sunX = 4.5
+      for (let x = 2; x <= 11; x++) {
+        for (let y = 2; y <= 9; y++) {
+          if (!isGlass(x, y)) continue
+          const d = Math.hypot(x - sunX, y - sunY)
+          if (d <= 1.1) put(x, y, '#fff1c4', false)
+          else if (d <= 3.2) put(x, y, mix(glassAt(x, y), '#ffd27a', 0.45 * (1 - (d - 1.1) / 2.1)), false)
+        }
+      }
+    }
   } else {
     for (let x = 2; x <= 11; x++) {
       if (x === 6) continue
@@ -168,8 +227,8 @@ function clockFace(now: Date): string {
 }
 
 /** The scene's cells, top to bottom: six rows of wall, one of desk top. */
-export function paintScene(frame: number, now: Date, ambient: Ambient, isLampOn: boolean): DeskCell[][] {
-  const px = paintPixels(frame, ambient, isLampOn)
+export function paintScene(frame: number, now: Date, ambient: Ambient, isLampOn: boolean, sky = 0): DeskCell[][] {
+  const px = paintPixels(frame, ambient, isLampOn, sky)
   const face = clockFace(now)
   const rows: DeskCell[][] = []
   for (let cy = 0; cy < SCENE_ROWS; cy++) {
