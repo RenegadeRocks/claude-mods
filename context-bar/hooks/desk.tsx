@@ -7,18 +7,15 @@
 import type { ClientModule } from 'claude-code'
 
 import type { Ambient, DeskMessage, DeskProps } from '../types'
-import { DESK_WIDTH, DRAWER_ROW, NOTE_ROW, paintScene, runs, skyFor } from './desk-art'
+import { COMPACT_DESK_WIDTH, DESK_WIDTH, DRAWER_ROW, NOTE_ROW, paintScene, runs, skyFor } from './desk-art'
 
 const FRAME_MS = 250
-// the lamp, in cells: a click on it switches it off and on
+// the lamp, in cells: a click on it switches it off and on (the compact desk leaves it out)
 const LAMP = { x0: 32, x1: 42, y0: 1, y1: 5 }
-// the drawer's two controls, by column
-const TIMER_END = 26
-const SOUND_START = DESK_WIDTH - 16
 // the notebook strip: its width inside the wood, the longest goal, and the hint shown while typing
-const NOTE_WIDTH = DESK_WIDTH - 2
 const MAX_GOAL = 120
 const SAVE_HINT = ' enter saves '
+const COMPACT_SAVE_HINT = ' ↵ save '
 const PENCIL = ' ✎  '
 // an open note with no typing for this many frames (30 s) saves itself: Escape
 // hands the keyboard back without telling the desk
@@ -32,6 +29,7 @@ const BRASS = '#f9e2af'
 const TEAL = '#94e2d5'
 
 const SOUND_NAMES: Record<Ambient, string> = { off: 'sounds off', rain: 'rain', storm: 'thunderstorm', fire: 'fireplace', focus: 'deep focus' }
+const SHORT_SOUND_NAMES: Record<Ambient, string> = { off: 'off', rain: 'rain', storm: 'storm', fire: 'fire', focus: 'focus' }
 
 type Local = {
   frame: number
@@ -99,6 +97,12 @@ function clockText(ms: number): string {
 
 const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
   const { Box, Text } = surface.elements
+  // the full desk, or the compact one: the scene's left part and a shorter drawer
+  const width = props.isCompact ? COMPACT_DESK_WIDTH : DESK_WIDTH
+  const timerEnd = props.isCompact ? 18 : 26
+  const soundStart = width - (props.isCompact ? 10 : 16)
+  const noteWidth = width - 2
+  const saveHint = props.isCompact ? COMPACT_SAVE_HINT : SAVE_HINT
   const fresh: Local = { frame: 0, baseNow: props.now, baseFrame: 0, isEditing: false, draft: '', typedAt: 0, isLampOn: true }
   if (surface.state === undefined) {
     surface.setState(fresh)
@@ -126,11 +130,11 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
       // the click gives the desk the keyboard; a second click saves
       if (s.isEditing) saveGoal(s)
       else surface.setState({ ...s, isEditing: true, draft: props.goal.trim(), typedAt: s.frame })
-    } else if (e.y === DRAWER_ROW && e.x < TIMER_END) {
+    } else if (e.y === DRAWER_ROW && e.x < timerEnd) {
       post({ type: 'pomodoro' })
-    } else if (e.y === DRAWER_ROW && e.x >= SOUND_START) {
+    } else if (e.y === DRAWER_ROW && e.x >= soundStart) {
       post({ type: 'ambient' })
-    } else if (e.x >= LAMP.x0 && e.x <= LAMP.x1 && e.y >= LAMP.y0 && e.y <= LAMP.y1) {
+    } else if (!props.isCompact && e.x >= LAMP.x0 && e.x <= LAMP.x1 && e.y >= LAMP.y0 && e.y <= LAMP.y1) {
       surface.setState({ ...s, isLampOn: !s.isLampOn })
     }
   })
@@ -154,27 +158,30 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
   if (latest.isEditing && latest.frame - latest.typedAt > IDLE_SAVE_FRAMES) saveGoal(latest)
 
   // the window's sky follows the focus timer: dawn as you focus, morning on the break
-  const scene = paintScene(local.frame, new Date(now), props.ambient, local.isLampOn, skyFor(props.pomodoro, now), props.glow)
+  const full = paintScene(local.frame, new Date(now), props.ambient, local.isLampOn, skyFor(props.pomodoro, now), props.glow)
+  const scene = props.isCompact ? full.map(row => row.slice(0, width)) : full
 
   // the drawer: the focus timer on the left, the ambient sound on the right
   const { phase, endsAt, rounds } = props.pomodoro
   const timer =
     phase === 'idle' || endsAt === null
-      ? '◷ start a 25-min focus'
-      : `${phase === 'focus' ? '◷' : '◌'} ${clockText(endsAt - now)} ${phase === 'focus' ? 'focus' : 'break'}  ${'●'.repeat(rounds % 4)}${'○'.repeat(4 - (rounds % 4))}`
-  const sound = `♪ ${SOUND_NAMES[props.ambient]}`
-  const drawer = ` ${timer}`.padEnd(SOUND_START).slice(0, SOUND_START) + sound.padStart(DESK_WIDTH - SOUND_START - 1) + ' '
+      ? props.isCompact
+        ? '◷ 25-min focus'
+        : '◷ start a 25-min focus'
+      : `${phase === 'focus' ? '◷' : '◌'} ${clockText(endsAt - now)} ${phase === 'focus' ? 'focus' : 'break'}${props.isCompact ? ' ' : '  '}${'●'.repeat(rounds % 4)}${'○'.repeat(4 - (rounds % 4))}`
+  const sound = `♪ ${(props.isCompact ? SHORT_SOUND_NAMES : SOUND_NAMES)[props.ambient]}`
+  const drawer = ` ${timer}`.padEnd(soundStart).slice(0, soundStart) + sound.padStart(width - soundStart - 1) + ' '
 
   const goal = props.goal.trim()
   // while typing, the end of the draft stays in view, with a blinking caret;
   // widths count terminal cells, so wide characters can't push the row out
   // the pencil draws two cells wide in some terminals, so two spaces follow it
-  const room = NOTE_WIDTH - PENCIL.length - 1 - SAVE_HINT.length
+  const room = noteWidth - PENCIL.length - 1 - saveHint.length
   const caret = local.frame % 4 < 2 ? '▏' : ' '
   const tail = fitCells(local.draft, room, true)
   const typing = `${PENCIL}${tail.text}${caret}${' '.repeat(room - tail.cells)}`
-  const head = fitCells(`${PENCIL}${goal || "click to write today's goal"}`, NOTE_WIDTH)
-  const note = head.text + ' '.repeat(NOTE_WIDTH - head.cells)
+  const head = fitCells(`${PENCIL}${goal || (props.isCompact ? "today's goal" : "click to write today's goal")}`, noteWidth)
+  const note = head.text + ' '.repeat(noteWidth - head.cells)
 
   return (
     <Box flexDirection="column" backgroundColor={WOOD}>
@@ -195,7 +202,7 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
               {typing}
             </Text>
             <Text backgroundColor={PAPER} color={FADED_INK} italic>
-              {SAVE_HINT}
+              {saveHint}
             </Text>
           </Text>
         ) : (
@@ -207,10 +214,10 @@ const Desk: ClientModule<DeskProps, Local> = (props, surface) => {
       </Text>
       <Text backgroundColor={WOOD}>
         <Text backgroundColor={WOOD} color={BRASS}>
-          {drawer.slice(0, SOUND_START)}
+          {drawer.slice(0, soundStart)}
         </Text>
         <Text backgroundColor={WOOD} color={TEAL}>
-          {drawer.slice(SOUND_START)}
+          {drawer.slice(soundStart)}
         </Text>
       </Text>
     </Box>

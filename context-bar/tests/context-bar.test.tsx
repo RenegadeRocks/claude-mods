@@ -808,7 +808,15 @@ test('a wide window gets the desk: a drawn scene, a notebook and a drawer', asyn
   expect(desk.some(t => /♪ sounds off/.test(t))).toBe(true)
   await ui.unmount()
 
-  // a narrower window keeps its rows and leaves the desk out
+  // an editor with its sidebar open gets the compact desk: 30 cells, a shorter drawer
+  const editor = await mountBand($, { ...props, bodyColumns: 165 })
+  expect((await editor.find({ type: 'Client', key: 'desk' }))?.props.width).toBe(30)
+  const compact = await deskTexts(editor)
+  expect(compact.some(t => /◷ 25-min focus/.test(t))).toBe(true)
+  expect(compact.some(t => /♪ off/.test(t))).toBe(true)
+  await editor.unmount()
+
+  // narrower still, the rows keep the room and the desk steps out
   const narrow = await mountBand($, { ...props, bodyColumns: 150 })
   expect(await narrow.find({ type: 'Client', key: 'desk' })).toBeUndefined()
   await narrow.unmount()

@@ -112,7 +112,15 @@ export type Ambient = 'off' | 'rain' | 'storm' | 'fire' | 'focus'
 export type Glow = 'soft' | 'bright'
 
 /** What the desk's surface module draws from; plain data. */
-export type DeskProps = { goal: string; pomodoro: Pomodoro; ambient: Ambient; glow: Glow; now: number }
+export type DeskProps = {
+  goal: string
+  pomodoro: Pomodoro
+  ambient: Ambient
+  glow: Glow
+  /** The narrow desk: the scene's left part, and a shorter drawer. */
+  isCompact: boolean
+  now: number
+}
 
 /** What the desk posts to the hooks module when it is clicked or typed into. */
 export type DeskMessage = { type: 'goal'; text: string } | { type: 'pomodoro' } | { type: 'ambient' }

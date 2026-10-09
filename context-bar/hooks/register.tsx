@@ -20,7 +20,7 @@ import type {
   Spend,
   Weather,
 } from '../types'
-import { BREAK_MS, DESK_WIDTH, FOCUS_MS } from './desk-art'
+import { BREAK_MS, COMPACT_DESK_WIDTH, DESK_WIDTH, FOCUS_MS } from './desk-art'
 import { NO_COACH, coachStep, coachTick, etaText, minutesToFull } from './coach'
 import { NO_TRACK, gpuStep, parseSmi } from './gpu'
 import { NO_WELLNESS, NUDGE_TOASTS, wellnessDone, wellnessTick } from './wellness'
@@ -96,6 +96,8 @@ const MIN_COLUMNS_FOR_SIDE = 140
 const MIN_DATA_FOR_ONE_CONTEXT_ROW = 60
 // the desk sits beside the rows under the context bar from this data width
 const MIN_DATA_FOR_DESK = 118
+// a narrower window (an editor with its sidebar open) gets a compact desk from here
+const MIN_DATA_FOR_COMPACT_DESK = 94
 const DESK_GAP = 2
 // the two limits share a row from this data width, and stack below it
 const MIN_DATA_FOR_ONE_LIMIT_ROW = 56
@@ -950,8 +952,11 @@ export const register: Register = (on, options) => {
     const funWidth = funColumns(columns)
     const dataWidth = showFun ? inner - funWidth - COLUMN_GAP : inner
     // the desk takes the right of the rows under the context bar when it fits
-    const showDesk = dataWidth >= MIN_DATA_FOR_DESK
-    const rowsWidth = showDesk ? dataWidth - DESK_WIDTH - DESK_GAP : dataWidth
+    // the full desk, a compact one (window, clock, books and plant), or none
+    const deskWidth =
+      dataWidth >= MIN_DATA_FOR_DESK ? DESK_WIDTH : dataWidth >= MIN_DATA_FOR_COMPACT_DESK ? COMPACT_DESK_WIDTH : 0
+    const showDesk = deskWidth > 0
+    const rowsWidth = showDesk ? dataWidth - deskWidth - DESK_GAP : dataWidth
     const meterCells = rowsWidth >= 70 ? 10 : 6
 
     const now = await $.clock.now()
@@ -968,6 +973,7 @@ export const register: Register = (on, options) => {
       goal: await read($, goal),
       pomodoro: await read($, pomodoro),
       ambient: await read($, ambient),
+      isCompact: deskWidth === COMPACT_DESK_WIDTH,
       glow: (await $.store.get('glow')) === 'bright' ? 'bright' : 'soft',
       now,
     }
@@ -1088,6 +1094,19 @@ export const register: Register = (on, options) => {
       </Text>
     )
     const fiveWarning = eta === null ? null : etaText(eta)
+    // how wide a limit's row runs, so the two share a row only when both fit
+    const limitWidth = (name: string, lim: Limit | null, warning: string | null = null) => {
+      if (lim === null) return LABEL + 'shows after the next reply'.length
+      const reset = resetsIn(now, lim.resetsAt)
+      return (
+        LABEL +
+        meterCells +
+        ` ${Math.round(lim.percent)}%`.length +
+        (reset ? ` ↻ ${reset}`.length : 0) +
+        // the warning sign can draw two cells wide
+        (warning ? ` ⚠ ${warning}`.length + 1 : 0)
+      )
+    }
 
     const modelLine = (
       <Text {...bg} wrap="truncate-end">
@@ -1114,13 +1133,14 @@ export const register: Register = (on, options) => {
         borderColor={BORDER}
       >
         {showFun && (
-          <Box {...bg} width={funWidth} marginRight={COLUMN_GAP}>
+          <Box {...bg} width={funWidth} flexShrink={0} marginRight={COLUMN_GAP}>
             <Client key="fun" module="./fun-column.tsx" props={fun} width={funWidth} />
           </Box>
         )}
         <Box {...bg} flexDirection="column" flexGrow={1}>
           <Box {...bg} flexDirection="row">
-            <Box {...bg} flexDirection="column" flexGrow={1}>
+            {/* a set width, so a long row truncates instead of pushing the desk off the edge */}
+            <Box {...bg} flexDirection="column" width={rowsWidth} flexShrink={0}>
               {isOneContextRow ? (
                 <Text {...bg} wrap="truncate-end">
                   {label('CONTEXT')}
@@ -1150,7 +1170,7 @@ export const register: Register = (on, options) => {
                   </Text>
                 ))}
               </Text>
-              {rowsWidth >= MIN_DATA_FOR_ONE_LIMIT_ROW ? (
+              {rowsWidth >= MIN_DATA_FOR_ONE_LIMIT_ROW && limitWidth('5H', s.fiveHour, fiveWarning) + 5 + limitWidth('WEEK', s.sevenDay) <= rowsWidth ? (
                 <Text {...bg} wrap="truncate-end">
                   {limit('5H', s.fiveHour, fiveWarning)}
                   {t(MUTED, '     ')}
@@ -1263,8 +1283,8 @@ export const register: Register = (on, options) => {
               </Text>
             </Box>
             {showDesk && (
-              <Box {...bg} marginLeft={DESK_GAP}>
-                <Client key="desk" module="./desk.tsx" props={desk} width={DESK_WIDTH} />
+              <Box {...bg} marginLeft={DESK_GAP} flexShrink={0}>
+                <Client key="desk" module="./desk.tsx" props={desk} width={deskWidth} />
               </Box>
             )}
           </Box>

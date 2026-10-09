@@ -9,6 +9,8 @@ import type { Ambient, Glow, Pomodoro } from '../types'
 export type DeskCell = { ch: string; fg: string; bg: string; bold?: boolean }
 
 export const DESK_WIDTH = 44
+// the compact desk shows the scene's left part: the window, the clock, the books and the plant
+export const COMPACT_DESK_WIDTH = 30
 // six rows of wall and one of desk top (14 pixels), then the notebook strip and the drawer
 export const SCENE_ROWS = 7
 export const NOTE_ROW = 7
