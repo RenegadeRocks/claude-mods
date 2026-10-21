@@ -1,0 +1,7 @@
+{
+  "name": "project-links",
+  "version": "0.1.0",
+  "description": "A Links pane on the right of Claude Code listing your project's artifacts and important links, read from dashboard/links.json in the project; /links prints them.",
+  "author": { "name": "RenegadeRocks" },
+  "types": "./types/index.d.ts"
+}

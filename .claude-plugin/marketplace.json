@@ -17,6 +17,11 @@
       "name": "project-colors",
       "source": "./project-colors",
       "description": "Every project gets its own prompt-bar colour and session name, learned from your own /color and /rename."
+    },
+    {
+      "name": "project-links",
+      "source": "./project-links",
+      "description": "A Links pane on the right listing your project's artifacts and important links, read from dashboard/links.json; /links prints them."
     }
   ]
 }
