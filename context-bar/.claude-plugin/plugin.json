@@ -1,7 +1,7 @@
 {
   "name": "context-bar",
   "version": "0.1.0",
-  "description": "A card above the prompt: context, limits, cache and API cost, model and effort, a quote, and an animated pet (cat or dog) that grows with your context.",
+  "description": "A side panel beside the conversation (or a card above the prompt): context, limits, cache and API cost, model and effort, a quote, and an animated pet (cat or dog) that grows with your context.",
   "types": "./types/index.d.ts",
   "userConfig": {
     "city": {

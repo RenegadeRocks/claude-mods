@@ -1,10 +1,12 @@
 # context-bar
 
-A Claude Code mod that puts a card above your prompt.
+A Claude Code mod that puts a panel beside your conversation: a tall column on the right, so the conversation keeps its full height. Rocky, the session and the numbers hang from the top; the day's quote and the desk stand at the bottom.
 
-**On the left:** your session length, the weather, the model and its effort, what Claude is doing (thinking or working), and Rocky. Rocky is a cat or a dog who grows as your context fills up, naps when you're idle, types on a laptop while tools run, and reacts when you click him.
+**Where it lives:** in Claude Code's fullscreen layout (the default) it docks as a side panel, 48 columns wide. Drag its edge to resize it; it rearranges itself to fit. Claude Code docks a panel a mod opens on its own only from 144 columns; between 110 and 144 the card shows a **Side panel ▸** button, and one press docks it (from then on it stays docked down to 110). Below 110 columns, or when the session runs on the main screen (`CLAUDE_CODE_NO_FLICKER=0`, or tmux), it stays a card above the prompt. `/context-bar bottom` keeps it above the prompt for good; `/context-bar side` brings the panel back.
 
-**On the right:** how full the context window is and what fills it, your 5-hour and weekly limits, how much the prompt cache saved you, what the session would cost at API prices, any subagents at work, and a fresh quote with every prompt.
+**At the top:** your session length, the weather, the model and its effort, what Claude is doing (thinking or working), and Rocky. Rocky is a cat or a dog who grows as your context fills up, naps when you're idle, types on a laptop while tools run, and reacts when you click him.
+
+**Under Rocky:** how full the context window is and what fills it, your 5-hour and weekly limits, how much the prompt cache saved you, what the session would cost at API prices, any subagents at work, and a fresh quote with every prompt.
 
 **Limit Coach:** watches how fast your 5-hour window fills. If you'll run out before it resets, the 5H row says when ("⚠ full in ~25m") and a note at 80% and 95% suggests a lower `/effort` or a lighter model. When a full window resets, a **Continue** button on the card picks the work back up.
 
@@ -20,7 +22,7 @@ A Claude Code mod that puts a card above your prompt.
 
 **Wellness nudges:** after 20 minutes of active work the pet closes its eyes and asks you to rest yours; after 60 it asks for a water break. Click the pet when you've done it. The pet chimes when a nudge or a finished GPU job needs you, and again every 5 minutes until you click; after a GPU job it keeps celebrating until then. `/context-bar sounds off` keeps it quiet. Time away counts as a break, so sessions that run for days don't matter. Change the minutes in `/plugin configure`, or turn them off with `/context-bar nudges off`.
 
-**The desk** (wide windows, about 165 columns and up): a cozy night desk in fine pixel art beside the numbers, with a moonlit city window, a neon digital clock showing the real time, books, a plant, a cactus, a steaming mug and a lamp. Click the lamp to switch it off and on.
+**The desk** (at the foot of the side panel; on the card above the prompt, from about 165 columns): a cozy night desk in fine pixel art, with a moonlit city window, a neon digital clock showing the real time, books, a plant, a cactus, a steaming mug and a lamp. Click the lamp to switch it off and on.
 
 - **Notebook:** click the paper strip and type this project's goal; it's there again next time you open the project.
 - **Focus timer:** click "start a 25-min focus" for a Pomodoro: 25 minutes of focus, a bell, then a 5-minute break. The dots count your rounds.
@@ -42,6 +44,8 @@ Press `y` to add the marketplace, then pick the **user** scope so it shows in ev
 |---|---|
 | `/context-bar off` | Hides the card in every session until you turn it back on |
 | `/context-bar on` | Shows it again |
+| `/context-bar side` | Docks it as a panel beside the conversation (remembered; the default) |
+| `/context-bar bottom` | Puts it back above the prompt (remembered) |
 | `/context-bar pet dog` | Rocky becomes a dog (remembered) |
 | `/context-bar pet cat` | Rocky becomes a cat (remembered) |
 | `/context-bar sounds off` | The pet stops chiming (remembered); `sounds on` brings it back |
@@ -61,6 +65,7 @@ Run `/plugin configure context-bar@renegaderocks` to change these:
 
 - The weather comes from [Open-Meteo](https://open-meteo.com), refreshed every 15 minutes.
 - The API cost is what this session would cost at Anthropic's published API rates. It comes from Claude Code's own `/cost` total, split into input, output and cache.
-- Below about 48 columns the card drops the left side and keeps the numbers.
+- Close the side panel with its close mark (or ctrl+x x) to hide it for the rest of the session; `/context-bar side` opens it again.
+- Below about 48 columns the card above the prompt drops the left side and keeps the numbers.
 
 Made by RenegadeRocks with Claude Code.

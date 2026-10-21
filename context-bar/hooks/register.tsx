@@ -3,7 +3,7 @@
 // numbers: context, rate limits, cache, API cost, model, subagents and a quote.
 
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register } from 'claude-code'
+import type { Elements, EngineInterface, Register } from 'claude-code'
 
 import type {
   AgentChip,
@@ -101,6 +101,16 @@ const MIN_DATA_FOR_COMPACT_DESK = 94
 const DESK_GAP = 2
 // the two limits share a row from this data width, and stack below it
 const MIN_DATA_FOR_ONE_LIMIT_ROW = 56
+// The side panel: a pane docked beside the transcript in the fullscreen layout,
+// as wide as the full desk (lamp and all) plus a column of padding each side
+const PANE = 'context-bar'
+const PANEL_COLUMNS = 48
+// the fullscreen layout docks a pane the person asked for from this terminal width
+const MIN_COLUMNS_TO_DOCK = 110
+// in the panel the pet sits beside its info rows from this width, and the
+// limit, cache and cost meters run 10 cells from this one
+const MIN_PANEL_FOR_SIDE_PET = 46
+const MIN_PANEL_FOR_LONG_METERS = 36
 const MIN_CELLS = 12
 const MAX_CELLS = 160
 // every meter's label takes this many columns, so the meters line up
@@ -156,6 +166,13 @@ const AGENT_NAMES = [
   'Maple', 'Cosmo', 'Tofu', 'Pogo', 'Comet', 'Ziggy', 'Fudge', 'Gizmo', 'Sunny', 'Bean',
 ]
 
+/** The items two to a row; the last row may hold one. */
+function pairsOf<T>(items: T[]): T[][] {
+  const rows: T[][] = []
+  for (let i = 0; i < items.length; i += 2) rows.push(items.slice(i, i + 2))
+  return rows
+}
+
 /** '3m ago', '2h ago', 'just now'. */
 function ago(now: number, then: number): string {
   const mins = Math.floor((now - then) / 60_000)
@@ -197,6 +214,44 @@ let stopMacAmbient: AbortController | null = null
 let ambientStream: ReturnType<EngineInterface['process']['spawn']> | null = null
 let ambientSeq = 0
 const agentNames = new Map<string, string>()
+// the side panel: whether it is docked now (the band steps aside while it is),
+// and whether the person closed it this session
+let isDocked = false
+let isSideClosed = false
+
+/** Where the card lives: 'side', a panel beside the conversation, unless /context-bar bottom chose the prompt. */
+async function layoutChoice($: EngineInterface): Promise<'side' | 'bottom'> {
+  try {
+    return (await $.store.get('layout')) === 'bottom' ? 'bottom' : 'side'
+  } catch {
+    return 'side'
+  }
+}
+
+/** Opens the side panel unless it is open already, placed or waiting for room. */
+async function openSide($: EngineInterface) {
+  try {
+    if ((await $.ui.panes()).some(p => p.id === PANE)) return
+    await $.ui.open({ id: PANE, title: 'Context', columns: PANEL_COLUMNS })
+  } catch {
+    // the band stays where it is
+  }
+}
+
+/**
+ * The band's Side panel button. A pane the mod opens on its own docks from 144
+ * columns; one the person asks for docks from 110, so the press opens it again
+ * as theirs. Narrower than that the fullscreen layout docks nothing.
+ */
+async function dockPanel($: EngineInterface) {
+  try {
+    isSideClosed = false
+    const opened = await $.ui.open({ id: PANE, title: 'Context', columns: PANEL_COLUMNS })
+    if (!opened.isPlaced) $.ui.toast(`The side panel needs a wider window: ${opened.reason}`, { timeoutMs: 8000 })
+  } catch {
+    // the band stays where it is
+  }
+}
 
 /** A fun name per subagent, kept for as long as the session lives. */
 function nameFor(id: string): string {
@@ -724,6 +779,563 @@ async function fetchWeather($: EngineInterface, city: string, unit: string) {
   }
 }
 
+/** How the card is drawn: where, and how much room it has. */
+type CardSite = {
+  columns: number
+  /** The panel's rows, floor to ceiling; null on the band, which fits its content. */
+  rows: number | null
+  /** The band's word on whether a turn runs; the panel has none, so null reads the phase as the hooks last set it. */
+  isWorking: boolean | null
+  isPanel: boolean
+  /** The band offers to dock the side panel while it waits for room. */
+  offersPanel: boolean
+}
+
+/** The card's tree, for the band above the prompt or the side panel. */
+async function drawCard($: EngineInterface, el: Elements['terminal' | 'desktop'], s: ContextSnap, site: CardSite) {
+  const { Box, Button, Client, Text } = el
+  const { columns, rows, isWorking, isPanel, offersPanel } = site
+  const bg = { backgroundColor: BG } as const
+  const t = (color: string, text: string, extra: { bold?: boolean; italic?: boolean } = {}) => (
+    <Text {...bg} color={color} {...extra}>
+      {text}
+    </Text>
+  )
+  /** `share` of `cells` filled in `color`, the rest an empty track. */
+  const meter = (share: number, color: string, cells: number) => {
+    const n = Math.round(Math.min(1, Math.max(0, share)) * cells)
+    return (
+      <Text {...bg}>
+        {t(color, '▰'.repeat(n))}
+        {t(TRACK, '▱'.repeat(cells - n))}
+      </Text>
+    )
+  }
+  const label = (text: string) => t(MUTED, text.padEnd(LABEL))
+
+  // Layout: the band's border and padding take two columns each side; the
+  // panel draws in the pane's own frame, with a column of padding each side,
+  // and stacks the fun column, the rows and the desk top to bottom.
+  const inner = columns - (isPanel ? 2 : 4)
+  const showFun = isPanel || columns >= MIN_COLUMNS_FOR_FUN
+  const funWidth = isPanel ? inner : funColumns(columns)
+  const dataWidth = showFun && !isPanel ? inner - funWidth - COLUMN_GAP : inner
+  // the desk takes the right of the rows under the context bar when it fits
+  // the full desk, a compact one (window, clock, books and plant), or none;
+  // in the panel it sits under the rows, the full desk wherever it fits
+  const deskWidth = isPanel
+    ? inner >= DESK_WIDTH ? DESK_WIDTH : inner >= COMPACT_DESK_WIDTH ? COMPACT_DESK_WIDTH : 0
+    : dataWidth >= MIN_DATA_FOR_DESK ? DESK_WIDTH : dataWidth >= MIN_DATA_FOR_COMPACT_DESK ? COMPACT_DESK_WIDTH : 0
+  const showDesk = deskWidth > 0
+  const rowsWidth = showDesk && !isPanel ? dataWidth - deskWidth - DESK_GAP : dataWidth
+  const meterCells = rowsWidth >= 70 || (isPanel && rowsWidth >= MIN_PANEL_FOR_LONG_METERS) ? 10 : 6
+
+  const now = await $.clock.now()
+  const [wx, live, shownQuote, stored, sp] = await Promise.all([
+    read($, weather),
+    read($, agents),
+    read($, quote),
+    read($, phase),
+    read($, spend),
+  ])
+  const current: Phase = isWorking === null ? stored : isWorking ? (stored === 'idle' ? 'thinking' : stored) : 'idle'
+  const mood = percentColor(s.percent)
+  const desk: DeskProps = {
+    goal: await read($, goal),
+    pomodoro: await read($, pomodoro),
+    ambient: await read($, ambient),
+    isCompact: deskWidth === COMPACT_DESK_WIDTH,
+    glow: (await $.store.get('glow')) === 'bright' ? 'bright' : 'soft',
+    now,
+  }
+  const [gpuNow, party, wellnessNow, chosenEffort, newest] = await Promise.all([
+    read($, gpu),
+    read($, celebrate),
+    read($, wellness),
+    read($, effortChoice),
+    read($, output),
+  ])
+
+  // The fun column's data; it draws and animates itself.
+  const sky = wx ? skyStyle(wx.code, wx.isDay) : null
+  // an effort set from the card or typed wins, while the same model is in use
+  const shownEffort = chosenEffort && chosenEffort.model === s.model ? chosenEffort.level : s.effort
+  const fun: FunProps = {
+    showTagline: funWidth >= 26,
+    // in the panel the pet sits beside its rows while they fit, which saves rows
+    layout: (isPanel ? funWidth >= MIN_PANEL_FOR_SIDE_PET : columns >= MIN_COLUMNS_FOR_SIDE) ? 'side' : 'stack',
+    pet: await read($, pet),
+    model: s.model,
+    effort: shownEffort,
+    session: sessionLength(now, s.startedAt),
+    weather:
+      wx && sky
+        ? {
+            ...sky,
+            temp: `${wx.temp}°${wx.unit}`,
+            tempColor: heatColor(wx.temp, wx.unit),
+            place: funWidth >= 26 ? wx.place.slice(0, 12) : '',
+          }
+        : null,
+    phase: current,
+    percent: s.percent,
+    gpu: gpuNow,
+    nudge: wellnessNow.due,
+    celebrate: party,
+  }
+
+  // Context: used rows, then the compaction buffer, then free space.
+  const used = s.rows.filter(r => r.kind === 'used' && r.tokens > 0)
+  const bar = [...used, ...s.rows.filter(r => r.kind === 'buffer'), ...s.rows.filter(r => r.kind === 'free')]
+  // one row when there is room: the label and share, the bar, the token counts
+  const contextHead = `${'CONTEXT'.padEnd(LABEL)}${s.percent}%  `
+  const contextTail = `  ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`
+  // beside the desk the bar ends where the desk begins, its totals right after it
+  const contextWidth = showDesk ? rowsWidth : dataWidth
+  const isOneContextRow = contextWidth >= MIN_DATA_FOR_ONE_CONTEXT_ROW
+  const barWidth = isOneContextRow ? contextWidth - contextHead.length - contextTail.length : contextWidth
+  const cells = allocate(bar, s.maxTokens, Math.min(MAX_CELLS, Math.max(MIN_CELLS, barWidth)))
+
+  // Cache: the share of the input reused from the prompt cache, which is
+  // billed at a fraction of the input rate. The session's turns when the
+  // mod has seen some, else the last reply's (say, just after a restart).
+  const inputSeen = sp.cacheRead + sp.cacheWrite + sp.input
+  const last = s.lastReply
+  const lastSeen = last ? last.cacheRead + last.cacheWrite + last.input : 0
+  const hit = inputSeen > 0 ? sp.cacheRead / inputSeen : last && lastSeen > 0 ? last.cacheRead / lastSeen : null
+
+  // Cost at API rates: /cost's total, itemized from the turns seen here;
+  // 'other' is what /cost counts beyond them (background calls, turns before
+  // the mod loaded).
+  const itemized = sp.usdInput + sp.usdOutput + sp.usdRead + sp.usdWrite
+  const total = Math.max(s.costUsd ?? 0, itemized)
+  const other = total - itemized
+  const costParts: [string, number, string][] = [
+    ['in', sp.usdInput, GOLDS[0]],
+    ['out', sp.usdOutput, GOLDS[1]],
+    ['read', sp.usdRead, GOLDS[2]],
+    ['write', sp.usdWrite, GOLDS[3]],
+    ...(other >= 0.01 ? [['other', other, GOLDS[4]] as [string, number, string]] : []),
+  ]
+  const costCells = shareCells(
+    costParts.map(([, usd]) => usd),
+    meterCells,
+  )
+  // the parts so far, named in their bar colours; beside the total when they fit
+  const shownParts = costParts.filter(([, usd]) => usd > 0)
+  const legendWidth = shownParts.reduce((w, [name, usd]) => w + 5 + name.length + 1 + money(usd).length, 0)
+  const legendBeside = LABEL + meterCells + 1 + money(total).length + legendWidth <= rowsWidth
+  const costLegend = (
+    <Text {...bg}>
+      {shownParts.map(([name, usd, color]) => (
+        <Text key={`v${name}`} {...bg}>
+          {t(color, '   ● ')}
+          {t(MUTED, `${name} ${money(usd)}`)}
+        </Text>
+      ))}
+    </Text>
+  )
+
+  const effortLevel = EFFORTS.indexOf(shownEffort ?? '') + 1
+  const spinFrame = Math.floor(now / SPINNER_MS)
+  const shownAgents = live.slice(0, 4)
+
+  // Limit Coach: the pace the 5-hour window fills at, when it would run out first
+  const coached = await read($, coach)
+  const eta = minutesToFull(coached.samples, now, s.fiveHour)
+
+  const barCells = bar.map((r, i) => (
+    <Text key={`c${i}`} {...bg} color={colorFor(r)}>
+      {(r.kind === 'free' ? '░' : r.kind === 'buffer' ? '▒' : '█').repeat(cells[i] ?? 0)}
+    </Text>
+  ))
+
+  const limit = (name: string, lim: Limit | null, warning: string | null = null) => (
+    <Text {...bg}>
+      {label(name)}
+      {lim === null ? (
+        t(MUTED, 'shows after the next reply')
+      ) : (
+        <Text {...bg}>
+          {meter(lim.percent / 100, percentColor(lim.percent), meterCells)}
+          {t(percentColor(lim.percent), ` ${Math.round(lim.percent)}%`, { bold: true })}
+          {t(MUTED, resetsIn(now, lim.resetsAt) ? ` ↻ ${resetsIn(now, lim.resetsAt)}` : '')}
+          {warning ? t(PEACH, ` ⚠ ${warning}`, { bold: true }) : null}
+        </Text>
+      )}
+    </Text>
+  )
+  const fiveWarning = eta === null ? null : etaText(eta)
+  // how wide a limit's row runs, so the two share a row only when both fit
+  const limitWidth = (name: string, lim: Limit | null, warning: string | null = null) => {
+    if (lim === null) return LABEL + 'shows after the next reply'.length
+    const reset = resetsIn(now, lim.resetsAt)
+    return (
+      LABEL +
+      meterCells +
+      ` ${Math.round(lim.percent)}%`.length +
+      (reset ? ` ↻ ${reset}`.length : 0) +
+      // the warning sign can draw two cells wide
+      (warning ? ` ⚠ ${warning}`.length + 1 : 0)
+    )
+  }
+
+  const modelLine = (
+    <Text {...bg} wrap="truncate-end">
+      {t(BLUE, '◆ ')}
+      {t(TEXT, s.model || 'Claude', { bold: true })}
+      {shownEffort && (
+        <Text {...bg}>
+          {t(MUTED, '  effort ')}
+          {meter(effortLevel / EFFORTS.length, MAUVE, EFFORTS.length)}
+          {t(TEXT, ` ${shownEffort}`)}
+        </Text>
+      )}
+    </Text>
+  )
+
+  if (isPanel) {
+    const rowWidth = inner - LABEL
+    // legends and buttons sit two to a row in fixed columns, so they read as a
+    // table instead of a ragged wrap
+    const half = Math.floor(rowWidth / 2)
+    const rule = (key: string) => (
+      <Text key={key} {...bg} color={BORDER}>
+        {'─'.repeat(inner)}
+      </Text>
+    )
+    const legend = (key: string, items: [key: string, color: string, text: string][]) =>
+      pairsOf(items).map((pair, row) => (
+        <Box key={`${key}${row}`} {...bg} flexDirection="row" marginLeft={LABEL}>
+          {pair.map(([k, color, text]) => (
+            <Box key={k} {...bg} width={half}>
+              <Text {...bg} wrap="truncate-end">
+                {t(color, '● ')}
+                {t(MUTED, text)}
+              </Text>
+            </Box>
+          ))}
+        </Box>
+      ))
+    const asks: [key: string, title: string, onPress: () => void][] = [
+      ...ACTIONS.map(([key, title, prompt]): [string, string, () => void] => [key, title, () => void sendPrompt($, prompt)]),
+      // compaction only earns its button once the context is getting full
+      ...(s.percent >= COMPACT_FROM
+        ? [['compact', `Compact · ${s.percent}%`, () => void compactNow($)] as [string, string, () => void]]
+        : []),
+    ]
+    const name = newest ? (newest.name.length > rowWidth - 2 ? `${newest.name.slice(0, rowWidth - 5)}...` : newest.name) : ''
+
+    // The numbers and buttons hang from the top, the quote and the desk stand
+    // on the floor, and the room between them stretches with the window.
+    return (
+      <Box {...bg} width={columns} minHeight={rows ?? 0} flexDirection="column" paddingX={1}>
+        <Client key="fun" module="./fun-column.tsx" props={fun} width={funWidth} />
+        {rule('rule-numbers')}
+        <Text {...bg} wrap="truncate-end">
+          {label('CONTEXT')}
+          {t(mood, `${s.percent}%`, { bold: true })}
+          {t(MUTED, `   ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`)}
+        </Text>
+        <Text {...bg}>{barCells}</Text>
+        {legend(
+          'context-legend',
+          used.map((r, i) => [`l${i}`, colorFor(r), `${shortName(r.name)} ${compact(r.tokens)}`]),
+        )}
+        <Text {...bg} wrap="truncate-end">
+          {limit('5H', s.fiveHour)}
+        </Text>
+        {/* a narrow column gives the coach's warning a row of its own */}
+        {fiveWarning && (
+          <Text {...bg} wrap="truncate-end">
+            {t(MUTED, ' '.repeat(LABEL))}
+            {t(PEACH, `⚠ ${fiveWarning}`, { bold: true })}
+          </Text>
+        )}
+        <Text {...bg} wrap="truncate-end">
+          {limit('WEEK', s.sevenDay)}
+        </Text>
+        {coached.isReset && (
+          <Box {...bg} flexDirection="row" alignItems="center">
+            {label('5H')}
+            {t(GREEN, 'reset!  ', { bold: true })}
+            <Button key="continue" variant="primary" label="Continue" onPress={() => void continueWork($)} />
+          </Box>
+        )}
+        <Text {...bg} wrap="truncate-end">
+          {label('CACHE')}
+          {hit === null ? (
+            t(MUTED, 'fills in after the next reply')
+          ) : (
+            <Text {...bg}>
+              {meter(hit, TEAL, meterCells)}
+              {t(TEAL, ` ${Math.round(hit * 100)}% reused`, { bold: true })}
+            </Text>
+          )}
+        </Text>
+        {hit !== null && (inputSeen === 0 || sp.usdSaved >= 0.005) && (
+          <Text {...bg} wrap="truncate-end">
+            {t(MUTED, ' '.repeat(LABEL))}
+            {inputSeen > 0 ? (
+              <Text {...bg}>
+                {t(MUTED, 'saved ')}
+                {t(GREEN, money(sp.usdSaved), { bold: true })}
+                {t(MUTED, ' vs no cache')}
+              </Text>
+            ) : (
+              t(MUTED, 'on the last reply')
+            )}
+          </Text>
+        )}
+        <Text {...bg} wrap="truncate-end">
+          {label('API $')}
+          {total > 0
+            ? costParts.map(([part, , color], i) => (
+                <Text key={`k${part}`} {...bg} color={color}>
+                  {'▰'.repeat(costCells[i] ?? 0)}
+                </Text>
+              ))
+            : t(TRACK, '▱'.repeat(meterCells))}
+          {t(TEXT, ` ${money(total)}`, { bold: true })}
+          {total > 0 ? null : t(MUTED, '   at API rates')}
+        </Text>
+        {total > 0 &&
+          legend(
+            'cost-legend',
+            shownParts.map(([part, usd, color]) => [`v${part}`, color, `${part} ${money(usd)}`]),
+          )}
+        {rule('rule-actions')}
+        {newest && (
+          <Box {...bg} flexDirection="column">
+            <Text {...bg} wrap="truncate-end">
+              {label('OUTPUT')}
+              {t(PEACH, '▣ ')}
+              {t(TEXT, name, { bold: true })}
+            </Text>
+            <Box {...bg} flexDirection="row" alignItems="center" marginLeft={LABEL}>
+              {t(MUTED, `${ago(now, newest.mtimeMs)}  `)}
+              <Box {...bg} marginRight={1}>
+                <Button key="open-output" label="Open" onPress={() => void openPath($, newest.path, false)} />
+              </Box>
+              <Button key="open-folder" label="Folder" onPress={() => void openPath($, newest.path, true)} />
+            </Box>
+          </Box>
+        )}
+        {pairsOf(asks).map((pair, row) => (
+          <Box key={`ask${row}`} {...bg} flexDirection="row">
+            {label(row === 0 ? 'ASK' : '')}
+            {pair.map(([key, title, onPress]) => (
+              <Box key={key} {...bg} width={half}>
+                <Button key={key} label={title} onPress={onPress} />
+              </Box>
+            ))}
+          </Box>
+        ))}
+        {/* one agent to a row, so a long type name never pushes the next off the edge */}
+        {shownAgents.map((a, i) => (
+          <Text key={a.id} {...bg} wrap="truncate-end">
+            {label(i === 0 ? 'AGENTS' : '')}
+            {t(YELLOW, `${SPINNER[(spinFrame + i * 3) % SPINNER.length]} `)}
+            {t(TEXT, a.name, { bold: true })}
+            {t(MUTED, ` ${a.type}`)}
+          </Text>
+        ))}
+        {live.length > shownAgents.length && (
+          <Text {...bg}>{t(MUTED, `${' '.repeat(LABEL)}+${live.length - shownAgents.length} more`)}</Text>
+        )}
+        <Box key="room" {...bg} flexGrow={1} minHeight={1} />
+        <Box {...bg} marginBottom={1}>
+          <Text {...bg} wrap="wrap">
+            {t(YELLOW, '✦ ')}
+            {t(TEXT, shownQuote || (QUOTES[0] ?? ''), { italic: true })}
+          </Text>
+        </Box>
+        {showDesk && (
+          <Box {...bg} flexDirection="row" justifyContent="center">
+            <Client key="desk" module="./desk.tsx" props={desk} width={deskWidth} />
+          </Box>
+        )}
+      </Box>
+    )
+  }
+
+  return (
+    <Box
+      {...bg}
+      width={columns}
+      flexDirection="row"
+      alignItems="center"
+      paddingX={1}
+      borderStyle="round"
+      borderColor={BORDER}
+    >
+      {showFun && (
+        <Box {...bg} width={funWidth} flexShrink={0} marginRight={COLUMN_GAP}>
+          <Client key="fun" module="./fun-column.tsx" props={fun} width={funWidth} />
+        </Box>
+      )}
+      <Box {...bg} flexDirection="column" flexGrow={1}>
+        <Box {...bg} flexDirection="row">
+          {/* a set width, so a long row truncates instead of pushing the desk off the edge */}
+          <Box {...bg} flexDirection="column" width={rowsWidth} flexShrink={0}>
+            {isOneContextRow ? (
+              <Text {...bg} wrap="truncate-end">
+                {label('CONTEXT')}
+                {t(mood, `${s.percent}%`, { bold: true })}
+                {t(MUTED, '  ')}
+                {barCells}
+                {t(MUTED, contextTail)}
+              </Text>
+            ) : (
+              [
+                <Text key="head" {...bg} wrap="truncate-end">
+                  {label('CONTEXT')}
+                  {t(mood, `${s.percent}%`, { bold: true })}
+                  {t(MUTED, `   ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`)}
+                </Text>,
+                <Text key="bar" {...bg}>
+                  {barCells}
+                </Text>,
+              ]
+            )}
+            <Text {...bg} wrap="truncate-end">
+              {t(MUTED, ' '.repeat(LABEL))}
+              {used.map((r, i) => (
+                <Text key={`l${i}`} {...bg}>
+                  {t(colorFor(r), '● ')}
+                  {t(MUTED, `${shortName(r.name)} ${compact(r.tokens)}${i < used.length - 1 ? '  ' : ''}`)}
+                </Text>
+              ))}
+            </Text>
+            {rowsWidth >= MIN_DATA_FOR_ONE_LIMIT_ROW && limitWidth('5H', s.fiveHour, fiveWarning) + 5 + limitWidth('WEEK', s.sevenDay) <= rowsWidth ? (
+              <Text {...bg} wrap="truncate-end">
+                {limit('5H', s.fiveHour, fiveWarning)}
+                {t(MUTED, '     ')}
+                {limit('WEEK', s.sevenDay)}
+              </Text>
+            ) : (
+              [
+                <Text key="five" {...bg} wrap="truncate-end">
+                  {limit('5H', s.fiveHour, fiveWarning)}
+                </Text>,
+                <Text key="week" {...bg} wrap="truncate-end">
+                  {limit('WEEK', s.sevenDay)}
+                </Text>,
+              ]
+            )}
+            {coached.isReset && (
+              <Box {...bg} flexDirection="row" alignItems="center">
+                {label('5H')}
+                {t(GREEN, 'reset!  ', { bold: true })}
+                <Button
+                  key="continue"
+                  variant="primary"
+                  label="Continue where we left off"
+                  onPress={() => void continueWork($)}
+                />
+              </Box>
+            )}
+            <Text {...bg} wrap="truncate-end">
+              {label('CACHE')}
+              {hit === null ? (
+                t(MUTED, "fills in after Claude's next reply")
+              ) : (
+                <Text {...bg}>
+                  {meter(hit, TEAL, meterCells)}
+                  {t(TEAL, ` ${Math.round(hit * 100)}% reused`, { bold: true })}
+                  {inputSeen > 0
+                    ? sp.usdSaved >= 0.005 && (
+                        <Text {...bg}>
+                          {t(MUTED, '   saved ')}
+                          {t(GREEN, money(sp.usdSaved), { bold: true })}
+                          {t(MUTED, ' vs no cache')}
+                        </Text>
+                      )
+                    : t(MUTED, '   on the last reply')}
+                </Text>
+              )}
+            </Text>
+            <Text {...bg} wrap="truncate-end">
+              {label('API $')}
+              {total > 0
+                ? costParts.map(([name, , color], i) => (
+                    <Text key={`k${name}`} {...bg} color={color}>
+                      {'▰'.repeat(costCells[i] ?? 0)}
+                    </Text>
+                  ))
+                : t(TRACK, '▱'.repeat(meterCells))}
+              {t(TEXT, ` ${money(total)}`, { bold: true })}
+              {total > 0 ? (legendBeside ? costLegend : null) : t(MUTED, '   at API rates')}
+            </Text>
+            {total > 0 && !legendBeside && (
+              <Text {...bg} wrap="truncate-end">
+                {t(MUTED, ' '.repeat(LABEL - 3))}
+                {costLegend}
+              </Text>
+            )}
+            {/* the model sits under the weather in the fun column; with no fun column, here */}
+            {!showFun && modelLine}
+            {newest && (
+              <Box {...bg} flexDirection="row" alignItems="center">
+                {label('OUTPUT')}
+                {t(PEACH, '▣ ')}
+                {t(TEXT, newest.name.length > 40 ? `${newest.name.slice(0, 37)}...` : newest.name, { bold: true })}
+                {t(MUTED, `  ${ago(now, newest.mtimeMs)}  `)}
+                <Box {...bg} marginRight={1}>
+                  <Button key="open-output" label="Open" onPress={() => void openPath($, newest.path, false)} />
+                </Box>
+                <Button key="open-folder" label="Folder" onPress={() => void openPath($, newest.path, true)} />
+              </Box>
+            )}
+            <Box {...bg} flexDirection="row" flexWrap="wrap" alignItems="center">
+              {label('ASK')}
+              {ACTIONS.map(([key, name, prompt]) => (
+                <Box key={key} {...bg} marginRight={1}>
+                  <Button key={key} label={name} onPress={() => void sendPrompt($, prompt)} />
+                </Box>
+              ))}
+              {/* compaction only earns its button once the context is getting full */}
+              {s.percent >= COMPACT_FROM && (
+                <Box key="compact" {...bg} marginRight={1}>
+                  <Button key="compact" label={`Compact · ${s.percent}%`} onPress={() => void compactNow($)} />
+                </Box>
+              )}
+              {/* the panel waits for 144 columns on its own; a press docks it from 110 */}
+              {offersPanel && (
+                <Box key="dock" {...bg} marginRight={1}>
+                  <Button key="dock" label="Side panel ▸" onPress={() => void dockPanel($)} />
+                </Box>
+              )}
+            </Box>
+            {shownAgents.length > 0 && (
+              <Text {...bg} wrap="truncate-end">
+                {label('AGENTS')}
+                {shownAgents.map((a, i) => (
+                  <Text key={a.id} {...bg}>
+                    {t(YELLOW, `${SPINNER[(spinFrame + i * 3) % SPINNER.length]} `)}
+                    {t(TEXT, a.name, { bold: true })}
+                    {t(MUTED, ` ${a.type}${i < shownAgents.length - 1 ? '   ' : ''}`)}
+                  </Text>
+                ))}
+                {live.length > shownAgents.length && t(MUTED, `   +${live.length - shownAgents.length}`)}
+              </Text>
+            )}
+            <Text {...bg} wrap="wrap">
+              {t(YELLOW, '✦ ')}
+              {t(TEXT, shownQuote || (QUOTES[0] ?? ''), { italic: true })}
+            </Text>
+          </Box>
+          {showDesk && (
+            <Box {...bg} marginLeft={DESK_GAP} flexShrink={0}>
+              <Client key="desk" module="./desk.tsx" props={desk} width={deskWidth} />
+            </Box>
+          )}
+        </Box>
+      </Box>
+    </Box>
+  )
+}
+
 export const register: Register = (on, options) => {
   const city = String(options.city ?? 'Ludhiana').trim()
   const unit = String(options.unit ?? 'celsius')
@@ -735,7 +1347,7 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'context-bar',
-      description: 'Show or hide the context bar, or swap the pet: /context-bar [on|off|toggle|pet dog|pet cat]',
+      description: 'Show or hide the context bar, dock it beside the conversation or above the prompt, or swap the pet: /context-bar [on|off|side|bottom|pet dog|pet cat]',
     })
     // `/context-bar off` sticks across sessions until it is turned back on
     if ((await $.store.get('isOn')) === false) await update($, isOn, () => false)
@@ -887,6 +1499,31 @@ export const register: Register = (on, options) => {
       }
     }
 
+    // where the card lives: a panel beside the conversation, or above the prompt
+    if (words[0] === 'side' || words[0] === 'bottom') {
+      await $.store.set('layout', words[0])
+      if (words[0] === 'bottom') {
+        isDocked = false
+        await $.ui.close({ id: PANE }).catch(() => {})
+        $.ui.invalidate('ui.render')
+        return { text: 'The context bar is back above the prompt. /context-bar side moves it beside the conversation.' }
+      }
+      isSideClosed = false
+      if (!e.presentation.isFullscreen) {
+        return {
+          text: "Saved. The side panel needs Claude Code's fullscreen layout; this session draws on the main screen, so the card stays above the prompt here.",
+        }
+      }
+      // the person asked, so it opens at any width
+      const opened = await $.ui.open({ id: PANE, title: 'Context', columns: PANEL_COLUMNS })
+      $.ui.invalidate('ui.render')
+      return {
+        text: opened.isPlaced
+          ? 'The context bar is now a panel beside the conversation. /context-bar bottom puts it back above the prompt.'
+          : `The side panel opens once there is room (${opened.reason}); until then the card stays above the prompt.`,
+      }
+    }
+
     if (words[0] === 'nudges') {
       const isOn = words[1] !== 'off'
       await $.store.set('nudges', isOn)
@@ -906,14 +1543,21 @@ export const register: Register = (on, options) => {
     // a word it doesn't know explains the command rather than flipping the bar
     if (arg !== '' && arg !== 'on' && arg !== 'off' && arg !== 'toggle') {
       return {
-        text: 'Usage: /context-bar [on|off|toggle] · pet dog|cat · sounds on|off · nudges on|off · glow soft|bright. On its own it switches the bar off or on.',
+        text: 'Usage: /context-bar [on|off|toggle] · side|bottom · pet dog|cat · sounds on|off · nudges on|off · glow soft|bright. On its own it switches the bar off or on.',
       }
     }
     const was = await read($, isOn)
     const now = arg === 'on' ? true : arg === 'off' ? false : !was
     await update($, isOn, () => now)
     await $.store.set('isOn', now)
-    if (now) await refresh($)
+    if (now) {
+      // on again brings the side panel back too, if it was closed
+      isSideClosed = false
+      await refresh($)
+    } else {
+      isDocked = false
+      await $.ui.close({ id: PANE }).catch(() => {})
+    }
 
     return { text: now ? 'Context bar on.' : 'Context bar off, in every session until /context-bar on.' }
   })
@@ -925,371 +1569,60 @@ export const register: Register = (on, options) => {
     if (s === null || !isCardSurface || e.props.hasSurvey || !(await read($, isOn))) {
       return next(e)
     }
-
-    const { Box, Button, Client, Text } = $.ui.resolve(e)
-    const bg = { backgroundColor: BG } as const
-    const t = (color: string, text: string, extra: { bold?: boolean; italic?: boolean } = {}) => (
-      <Text {...bg} color={color} {...extra}>
-        {text}
-      </Text>
-    )
-    /** `share` of `cells` filled in `color`, the rest an empty track. */
-    const meter = (share: number, color: string, cells: number) => {
-      const n = Math.round(Math.min(1, Math.max(0, share)) * cells)
-      return (
-        <Text {...bg}>
-          {t(color, '▰'.repeat(n))}
-          {t(TRACK, '▱'.repeat(cells - n))}
-        </Text>
-      )
-    }
-    const label = (text: string) => t(MUTED, text.padEnd(LABEL))
-
-    // Layout: the card's border and padding take two columns each side.
-    const columns = e.props.bodyColumns
-    const inner = columns - 4
-    const showFun = columns >= MIN_COLUMNS_FOR_FUN
-    const funWidth = funColumns(columns)
-    const dataWidth = showFun ? inner - funWidth - COLUMN_GAP : inner
-    // the desk takes the right of the rows under the context bar when it fits
-    // the full desk, a compact one (window, clock, books and plant), or none
-    const deskWidth =
-      dataWidth >= MIN_DATA_FOR_DESK ? DESK_WIDTH : dataWidth >= MIN_DATA_FOR_COMPACT_DESK ? COMPACT_DESK_WIDTH : 0
-    const showDesk = deskWidth > 0
-    const rowsWidth = showDesk ? dataWidth - deskWidth - DESK_GAP : dataWidth
-    const meterCells = rowsWidth >= 70 ? 10 : 6
-
-    const now = await $.clock.now()
-    const [wx, live, shownQuote, stored, sp] = await Promise.all([
-      read($, weather),
-      read($, agents),
-      read($, quote),
-      read($, phase),
-      read($, spend),
-    ])
-    const current: Phase = e.props.isWorking ? (stored === 'idle' ? 'thinking' : stored) : 'idle'
-    const mood = percentColor(s.percent)
-    const desk: DeskProps = {
-      goal: await read($, goal),
-      pomodoro: await read($, pomodoro),
-      ambient: await read($, ambient),
-      isCompact: deskWidth === COMPACT_DESK_WIDTH,
-      glow: (await $.store.get('glow')) === 'bright' ? 'bright' : 'soft',
-      now,
-    }
-    const [gpuNow, party, wellnessNow, chosenEffort, newest] = await Promise.all([
-      read($, gpu),
-      read($, celebrate),
-      read($, wellness),
-      read($, effortChoice),
-      read($, output),
-    ])
-
-    // The fun column's data; it draws and animates itself.
-    const sky = wx ? skyStyle(wx.code, wx.isDay) : null
-    // an effort set from the card or typed wins, while the same model is in use
-    const shownEffort = chosenEffort && chosenEffort.model === s.model ? chosenEffort.level : s.effort
-    const fun: FunProps = {
-      showTagline: funWidth >= 26,
-      layout: columns >= MIN_COLUMNS_FOR_SIDE ? 'side' : 'stack',
-      pet: await read($, pet),
-      model: s.model,
-      effort: shownEffort,
-      session: sessionLength(now, s.startedAt),
-      weather:
-        wx && sky
-          ? {
-              ...sky,
-              temp: `${wx.temp}°${wx.unit}`,
-              tempColor: heatColor(wx.temp, wx.unit),
-              place: funWidth >= 26 ? wx.place.slice(0, 12) : '',
-            }
-          : null,
-      phase: current,
-      percent: s.percent,
-      gpu: gpuNow,
-      nudge: wellnessNow.due,
-      celebrate: party,
+    // where the layout docks a pane, the card lives in the side panel: the
+    // band steps aside once it is docked, and stands in while it waits for room
+    const wantsPanel = e.viewport?.isFullscreen === true && (await layoutChoice($)) === 'side'
+    if (wantsPanel) {
+      if (isDocked || isSideClosed) return next(e)
+      void openSide($)
     }
 
-    // Context: used rows, then the compaction buffer, then free space.
-    const used = s.rows.filter(r => r.kind === 'used' && r.tokens > 0)
-    const bar = [...used, ...s.rows.filter(r => r.kind === 'buffer'), ...s.rows.filter(r => r.kind === 'free')]
-    // one row when there is room: the label and share, the bar, the token counts
-    const contextHead = `${'CONTEXT'.padEnd(LABEL)}${s.percent}%  `
-    const contextTail = `  ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`
-    // beside the desk the bar ends where the desk begins, its totals right after it
-    const contextWidth = showDesk ? rowsWidth : dataWidth
-    const isOneContextRow = contextWidth >= MIN_DATA_FOR_ONE_CONTEXT_ROW
-    const barWidth = isOneContextRow ? contextWidth - contextHead.length - contextTail.length : contextWidth
-    const cells = allocate(bar, s.maxTokens, Math.min(MAX_CELLS, Math.max(MIN_CELLS, barWidth)))
+    return drawCard($, $.ui.resolve(e), s, {
+      columns: e.props.bodyColumns,
+      rows: null,
+      isWorking: e.props.isWorking,
+      isPanel: false,
+      // narrower than this the fullscreen layout docks no pane at all
+      offersPanel: wantsPanel && (e.viewport?.columns ?? 0) >= MIN_COLUMNS_TO_DOCK,
+    })
+  })
 
-    // Cache: the share of the input reused from the prompt cache, which is
-    // billed at a fraction of the input rate. The session's turns when the
-    // mod has seen some, else the last reply's (say, just after a restart).
-    const inputSeen = sp.cacheRead + sp.cacheWrite + sp.input
-    const last = s.lastReply
-    const lastSeen = last ? last.cacheRead + last.cacheWrite + last.input : 0
-    const hit = inputSeen > 0 ? sp.cacheRead / inputSeen : last && lastSeen > 0 ? last.cacheRead / lastSeen : null
-
-    // Cost at API rates: /cost's total, itemized from the turns seen here;
-    // 'other' is what /cost counts beyond them (background calls, turns before
-    // the mod loaded).
-    const itemized = sp.usdInput + sp.usdOutput + sp.usdRead + sp.usdWrite
-    const total = Math.max(s.costUsd ?? 0, itemized)
-    const other = total - itemized
-    const costParts: [string, number, string][] = [
-      ['in', sp.usdInput, GOLDS[0]],
-      ['out', sp.usdOutput, GOLDS[1]],
-      ['read', sp.usdRead, GOLDS[2]],
-      ['write', sp.usdWrite, GOLDS[3]],
-      ...(other >= 0.01 ? [['other', other, GOLDS[4]] as [string, number, string]] : []),
-    ]
-    const costCells = shareCells(
-      costParts.map(([, usd]) => usd),
-      meterCells,
-    )
-    // the parts so far, named in their bar colours; beside the total when they fit
-    const shownParts = costParts.filter(([, usd]) => usd > 0)
-    const legendWidth = shownParts.reduce((w, [name, usd]) => w + 5 + name.length + 1 + money(usd).length, 0)
-    const legendBeside = LABEL + meterCells + 1 + money(total).length + legendWidth <= rowsWidth
-    const costLegend = (
-      <Text {...bg}>
-        {shownParts.map(([name, usd, color]) => (
-          <Text key={`v${name}`} {...bg}>
-            {t(color, '   ● ')}
-            {t(MUTED, `${name} ${money(usd)}`)}
-          </Text>
-        ))}
-      </Text>
-    )
-
-    const effortLevel = EFFORTS.indexOf(shownEffort ?? '') + 1
-    const spinFrame = Math.floor(now / SPINNER_MS)
-    const shownAgents = live.slice(0, 4)
-
-    // Limit Coach: the pace the 5-hour window fills at, when it would run out first
-    const coached = await read($, coach)
-    const eta = minutesToFull(coached.samples, now, s.fiveHour)
-
-    const barCells = bar.map((r, i) => (
-      <Text key={`c${i}`} {...bg} color={colorFor(r)}>
-        {(r.kind === 'free' ? '░' : r.kind === 'buffer' ? '▒' : '█').repeat(cells[i] ?? 0)}
-      </Text>
-    ))
-
-    const limit = (name: string, lim: Limit | null, warning: string | null = null) => (
-      <Text {...bg}>
-        {label(name)}
-        {lim === null ? (
-          t(MUTED, 'shows after the next reply')
-        ) : (
-          <Text {...bg}>
-            {meter(lim.percent / 100, percentColor(lim.percent), meterCells)}
-            {t(percentColor(lim.percent), ` ${Math.round(lim.percent)}%`, { bold: true })}
-            {t(MUTED, resetsIn(now, lim.resetsAt) ? ` ↻ ${resetsIn(now, lim.resetsAt)}` : '')}
-            {warning ? t(PEACH, ` ⚠ ${warning}`, { bold: true }) : null}
-          </Text>
-        )}
-      </Text>
-    )
-    const fiveWarning = eta === null ? null : etaText(eta)
-    // how wide a limit's row runs, so the two share a row only when both fit
-    const limitWidth = (name: string, lim: Limit | null, warning: string | null = null) => {
-      if (lim === null) return LABEL + 'shows after the next reply'.length
-      const reset = resetsIn(now, lim.resetsAt)
-      return (
-        LABEL +
-        meterCells +
-        ` ${Math.round(lim.percent)}%`.length +
-        (reset ? ` ↻ ${reset}`.length : 0) +
-        // the warning sign can draw two cells wide
-        (warning ? ` ⚠ ${warning}`.length + 1 : 0)
-      )
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    // above the prompt a pane is no sidebar: close it and let the band draw
+    if (e.props.placement !== 'dock') {
+      if (isDocked) {
+        isDocked = false
+        $.ui.invalidate('ui.render')
+      }
+      void $.ui.close({ id: PANE }).catch(() => {})
+      return <Text dimColor>context bar</Text>
     }
+    if (!isDocked) {
+      isDocked = true
+      // the band hears it and steps aside
+      $.ui.invalidate('ui.render')
+    }
+    const s = await read($, snap)
+    const isCardSurface = e.surface === 'terminal' || e.surface === 'desktop'
+    if (s === null || !isCardSurface) return <Text dimColor>Reading the session...</Text>
 
-    const modelLine = (
-      <Text {...bg} wrap="truncate-end">
-        {t(BLUE, '◆ ')}
-        {t(TEXT, s.model || 'Claude', { bold: true })}
-        {shownEffort && (
-          <Text {...bg}>
-            {t(MUTED, '  effort ')}
-            {meter(effortLevel / EFFORTS.length, MAUVE, EFFORTS.length)}
-            {t(TEXT, ` ${shownEffort}`)}
-          </Text>
-        )}
-      </Text>
-    )
+    return drawCard($, $.ui.resolve(e), s, {
+      columns: e.props.bodyColumns,
+      rows: e.props.scroll?.bodyRows ?? null,
+      isWorking: null,
+      isPanel: true,
+      offersPanel: false,
+    })
+  })
 
-    return (
-      <Box
-        {...bg}
-        width={columns}
-        flexDirection="row"
-        alignItems="center"
-        paddingX={1}
-        borderStyle="round"
-        borderColor={BORDER}
-      >
-        {showFun && (
-          <Box {...bg} width={funWidth} flexShrink={0} marginRight={COLUMN_GAP}>
-            <Client key="fun" module="./fun-column.tsx" props={fun} width={funWidth} />
-          </Box>
-        )}
-        <Box {...bg} flexDirection="column" flexGrow={1}>
-          <Box {...bg} flexDirection="row">
-            {/* a set width, so a long row truncates instead of pushing the desk off the edge */}
-            <Box {...bg} flexDirection="column" width={rowsWidth} flexShrink={0}>
-              {isOneContextRow ? (
-                <Text {...bg} wrap="truncate-end">
-                  {label('CONTEXT')}
-                  {t(mood, `${s.percent}%`, { bold: true })}
-                  {t(MUTED, '  ')}
-                  {barCells}
-                  {t(MUTED, contextTail)}
-                </Text>
-              ) : (
-                [
-                  <Text key="head" {...bg} wrap="truncate-end">
-                    {label('CONTEXT')}
-                    {t(mood, `${s.percent}%`, { bold: true })}
-                    {t(MUTED, `   ${compact(s.totalTokens)} / ${compact(s.maxTokens)}`)}
-                  </Text>,
-                  <Text key="bar" {...bg}>
-                    {barCells}
-                  </Text>,
-                ]
-              )}
-              <Text {...bg} wrap="truncate-end">
-                {t(MUTED, ' '.repeat(LABEL))}
-                {used.map((r, i) => (
-                  <Text key={`l${i}`} {...bg}>
-                    {t(colorFor(r), '● ')}
-                    {t(MUTED, `${shortName(r.name)} ${compact(r.tokens)}${i < used.length - 1 ? '  ' : ''}`)}
-                  </Text>
-                ))}
-              </Text>
-              {rowsWidth >= MIN_DATA_FOR_ONE_LIMIT_ROW && limitWidth('5H', s.fiveHour, fiveWarning) + 5 + limitWidth('WEEK', s.sevenDay) <= rowsWidth ? (
-                <Text {...bg} wrap="truncate-end">
-                  {limit('5H', s.fiveHour, fiveWarning)}
-                  {t(MUTED, '     ')}
-                  {limit('WEEK', s.sevenDay)}
-                </Text>
-              ) : (
-                [
-                  <Text key="five" {...bg} wrap="truncate-end">
-                    {limit('5H', s.fiveHour, fiveWarning)}
-                  </Text>,
-                  <Text key="week" {...bg} wrap="truncate-end">
-                    {limit('WEEK', s.sevenDay)}
-                  </Text>,
-                ]
-              )}
-              {coached.isReset && (
-                <Box {...bg} flexDirection="row" alignItems="center">
-                  {label('5H')}
-                  {t(GREEN, 'reset!  ', { bold: true })}
-                  <Button
-                    key="continue"
-                    variant="primary"
-                    label="Continue where we left off"
-                    onPress={() => void continueWork($)}
-                  />
-                </Box>
-              )}
-              <Text {...bg} wrap="truncate-end">
-                {label('CACHE')}
-                {hit === null ? (
-                  t(MUTED, "fills in after Claude's next reply")
-                ) : (
-                  <Text {...bg}>
-                    {meter(hit, TEAL, meterCells)}
-                    {t(TEAL, ` ${Math.round(hit * 100)}% reused`, { bold: true })}
-                    {inputSeen > 0
-                      ? sp.usdSaved >= 0.005 && (
-                          <Text {...bg}>
-                            {t(MUTED, '   saved ')}
-                            {t(GREEN, money(sp.usdSaved), { bold: true })}
-                            {t(MUTED, ' vs no cache')}
-                          </Text>
-                        )
-                      : t(MUTED, '   on the last reply')}
-                  </Text>
-                )}
-              </Text>
-              <Text {...bg} wrap="truncate-end">
-                {label('API $')}
-                {total > 0
-                  ? costParts.map(([name, , color], i) => (
-                      <Text key={`k${name}`} {...bg} color={color}>
-                        {'▰'.repeat(costCells[i] ?? 0)}
-                      </Text>
-                    ))
-                  : t(TRACK, '▱'.repeat(meterCells))}
-                {t(TEXT, ` ${money(total)}`, { bold: true })}
-                {total > 0 ? (legendBeside ? costLegend : null) : t(MUTED, '   at API rates')}
-              </Text>
-              {total > 0 && !legendBeside && (
-                <Text {...bg} wrap="truncate-end">
-                  {t(MUTED, ' '.repeat(LABEL - 3))}
-                  {costLegend}
-                </Text>
-              )}
-              {/* the model sits under the weather in the fun column; with no fun column, here */}
-              {!showFun && modelLine}
-              {newest && (
-                <Box {...bg} flexDirection="row" alignItems="center">
-                  {label('OUTPUT')}
-                  {t(PEACH, '▣ ')}
-                  {t(TEXT, newest.name.length > 40 ? `${newest.name.slice(0, 37)}...` : newest.name, { bold: true })}
-                  {t(MUTED, `  ${ago(now, newest.mtimeMs)}  `)}
-                  <Box {...bg} marginRight={1}>
-                    <Button key="open-output" label="Open" onPress={() => void openPath($, newest.path, false)} />
-                  </Box>
-                  <Button key="open-folder" label="Folder" onPress={() => void openPath($, newest.path, true)} />
-                </Box>
-              )}
-              <Box {...bg} flexDirection="row" flexWrap="wrap" alignItems="center">
-                {label('ASK')}
-                {ACTIONS.map(([key, name, prompt]) => (
-                  <Box key={key} {...bg} marginRight={1}>
-                    <Button key={key} label={name} onPress={() => void sendPrompt($, prompt)} />
-                  </Box>
-                ))}
-                {/* compaction only earns its button once the context is getting full */}
-                {s.percent >= COMPACT_FROM && (
-                  <Box key="compact" {...bg} marginRight={1}>
-                    <Button key="compact" label={`Compact · ${s.percent}%`} onPress={() => void compactNow($)} />
-                  </Box>
-                )}
-              </Box>
-              {shownAgents.length > 0 && (
-                <Text {...bg} wrap="truncate-end">
-                  {label('AGENTS')}
-                  {shownAgents.map((a, i) => (
-                    <Text key={a.id} {...bg}>
-                      {t(YELLOW, `${SPINNER[(spinFrame + i * 3) % SPINNER.length]} `)}
-                      {t(TEXT, a.name, { bold: true })}
-                      {t(MUTED, ` ${a.type}${i < shownAgents.length - 1 ? '   ' : ''}`)}
-                    </Text>
-                  ))}
-                  {live.length > shownAgents.length && t(MUTED, `   +${live.length - shownAgents.length}`)}
-                </Text>
-              )}
-              <Text {...bg} wrap="wrap">
-                {t(YELLOW, '✦ ')}
-                {t(TEXT, shownQuote || (QUOTES[0] ?? ''), { italic: true })}
-              </Text>
-            </Box>
-            {showDesk && (
-              <Box {...bg} marginLeft={DESK_GAP} flexShrink={0}>
-                <Client key="desk" module="./desk.tsx" props={desk} width={deskWidth} />
-              </Box>
-            )}
-          </Box>
-        </Box>
-      </Box>
-    )
+  on('ui.close', async ($, e, next) => {
+    if (e.id === PANE) {
+      isDocked = false
+      // the person's own close hides the card for this session; /context-bar side brings it back
+      if (e.origin.kind === 'person') isSideClosed = true
+      $.ui.invalidate('ui.render')
+    }
+    return next(e)
   })
 }

@@ -925,3 +925,187 @@ test('the sound button steps through rain, thunderstorm, fireplace and deep focu
   expect((await deskTexts(back)).some(t => /♪ rain/.test(t))).toBe(true)
   await back.unmount()
 })
+
+// The side panel: the engine's pane calls, answered beneath the mod
+function panes(on: On, opts: { isPlaced?: boolean } = {}) {
+  const opened: { id: string; columns?: number }[] = []
+  const closed: string[] = []
+  on('ui.open', (_, e) => {
+    opened.push({ id: e.id, columns: e.columns })
+    return { value: opts.isPlaced === false ? { isPlaced: false, reason: 'below 144 columns' } : { isPlaced: true } } as never
+  })
+  on('ui.panes', () => ({ value: opened.map(p => ({ id: p.id, title: 'Context', isShown: true, isFocused: false, isPlaced: opts.isPlaced !== false, plugin: 'context-bar' })) }) as never)
+  on('ui.close', (_, e) => {
+    closed.push(e.id)
+    return { value: undefined } as never
+  })
+  return { opened, closed }
+}
+
+const FULLSCREEN = { columns: 200, rows: 50, isFullscreen: true }
+const mountPanel = ($: Engine, bodyColumns = 48, placement: 'dock' | 'inline' = 'dock') =>
+  $.ui.mount({
+    plugin: 'context-bar',
+    surface: 'terminal',
+    component: 'Pane',
+    requestId: 'context-bar',
+    props: { title: 'Context', isFocused: false, bodyColumns, placement, scroll: { offset: 0, bodyRows: 60, contentRows: 0 } } as never,
+    viewport: FULLSCREEN,
+  })
+const mountFullscreenBand = ($: Engine) =>
+  $.ui.mount({ plugin: 'context-bar', surface: 'terminal', component: 'AbovePrompt', props: props as never, viewport: FULLSCREEN })
+const runBar = ($: Engine, args: string, isFullscreen = true) =>
+  $.command.run({ command: 'context-bar', args, origin: { kind: 'composer' }, presentation: { isFullscreen, columns: 200 } } as never)
+
+test('in the fullscreen layout the card opens as a side panel, 48 columns wide', async ($, on) => {
+  const clock = world(on)
+  const { opened } = panes(on)
+  await started($, clock)
+  const band = await mountFullscreenBand($)
+  await clock.settle()
+  expect(opened).toEqual([{ id: 'context-bar', columns: 48 }])
+  await band.unmount()
+})
+
+test('the panel stacks Rocky, the numbers and the whole desk, lamp included', async ($, on) => {
+  const clock = world(on)
+  panes(on)
+  await started($, clock)
+  const ui = await mountPanel($)
+
+  // the pet beside its info rows, across the panel's width inside its padding
+  const fun = await ui.find({ type: 'Client', key: 'fun' })
+  expect(fun?.props.width).toBe(46)
+  expect((fun?.props.props as { layout: string }).layout).toBe('side')
+
+  // the context label and the bar on rows of their own, the bar the full width
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text ?? '')
+  expect(texts.some(t => /^CONTEXT 42% {3}84k \/ 200k$/.test(t))).toBe(true)
+  expect(texts.some(t => /^█+▒*░+$/.test(t) && t.length === 46)).toBe(true)
+  expect(texts.some(t => /^5H /.test(t))).toBe(true)
+  expect(texts.some(t => /^WEEK /.test(t))).toBe(true)
+
+  // the full desk, not the compact one that leaves the lamp out
+  expect((await ui.find({ type: 'Client', key: 'desk' }))?.props.width).toBe(44)
+  await ui.unmount()
+})
+
+test('a narrow panel stacks the pet and gives the desk its compact form', async ($, on) => {
+  const clock = world(on)
+  panes(on)
+  await started($, clock)
+  const ui = await mountPanel($, 36)
+  expect(((await ui.find({ type: 'Client', key: 'fun' }))?.props.props as { layout: string }).layout).toBe('stack')
+  expect((await ui.find({ type: 'Client', key: 'desk' }))?.props.width).toBe(30)
+  await ui.unmount()
+})
+
+test('the band steps aside once the panel is docked', async ($, on) => {
+  const clock = world(on)
+  panes(on)
+  await started($, clock)
+  const band = await mountFullscreenBand($)
+  expect(await band.find({ type: 'Text', text: /42%/ })).toBeDefined()
+  const panel = await mountPanel($)
+  await clock.settle()
+  expect(await band.find({ type: 'Text', text: /42%/ })).toBeUndefined()
+  expect(await panel.find({ type: 'Text', text: /42%/ })).toBeDefined()
+  await panel.unmount()
+  await band.unmount()
+})
+
+test('while the panel waits for room, the band stays above the prompt', async ($, on) => {
+  const clock = world(on)
+  panes(on, { isPlaced: false })
+  await started($, clock)
+  const band = await mountFullscreenBand($)
+  await clock.settle()
+  expect(await band.find({ type: 'Text', text: /42%/ })).toBeDefined()
+  await band.unmount()
+})
+
+test('/context-bar bottom puts the card back above the prompt, and side docks it again', async ($, on) => {
+  const clock = world(on)
+  const { opened, closed } = panes(on)
+  await started($, clock)
+
+  expect((await runBar($, 'bottom')).text).toMatch(/back above the prompt/)
+  expect(closed).toContain('context-bar')
+  const band = await mountFullscreenBand($)
+  await clock.settle()
+  expect(opened).toEqual([])
+  expect(await band.find({ type: 'Text', text: /42%/ })).toBeDefined()
+  await band.unmount()
+
+  expect((await runBar($, 'side')).text).toMatch(/panel beside the conversation/)
+  expect(opened).toEqual([{ id: 'context-bar', columns: 48 }])
+})
+
+test('on the main screen the card stays above the prompt and opens no pane', async ($, on) => {
+  const clock = world(on)
+  const { opened } = panes(on)
+  await started($, clock)
+  const band = await $.ui.mount({
+    plugin: 'context-bar',
+    surface: 'terminal',
+    component: 'AbovePrompt',
+    props: props as never,
+    viewport: { columns: 200, rows: 50, isFullscreen: false },
+  })
+  await clock.settle()
+  expect(opened).toEqual([])
+  expect(await band.find({ type: 'Text', text: /42%/ })).toBeDefined()
+  expect((await runBar($, 'side', false)).text).toMatch(/needs Claude Code's fullscreen layout/)
+  await band.unmount()
+})
+
+test('the panel fills its column: numbers at the top, the quote and the desk on the floor', async ($, on) => {
+  const clock = world(on)
+  panes(on)
+  await started($, clock)
+  const ui = await mountPanel($)
+  // the panel is as tall as its column, so the room between can stretch
+  expect((await ui.find({ type: 'Box' }))?.props.minHeight).toBe(60)
+  expect((await ui.find({ type: 'Box', key: 'room' }))?.props.flexGrow).toBe(1)
+  // after the room: the quote, then the desk, last of all
+  const order = JSON.stringify(await ui.drawn())
+  const room = order.indexOf('"room"')
+  expect(room).toBeGreaterThan(order.indexOf('CONTEXT'))
+  expect(order.indexOf('✦')).toBeGreaterThan(room)
+  expect(order.indexOf('desk.tsx')).toBeGreaterThan(order.indexOf('✦'))
+  await ui.unmount()
+})
+
+test('the legends and the ASK buttons sit two to a row, in columns', async ($, on) => {
+  const clock = world(on)
+  panes(on)
+  await started($, clock)
+  const ui = await mountPanel($)
+  const texts = (await ui.findAll({ type: 'Text' })).map(t => t.text ?? '')
+  // three context rows used: two on the first legend row, one on the next
+  expect(texts.filter(t => /^● \S+ \d/.test(t)).length).toBeGreaterThanOrEqual(3)
+  for (const key of ['recap', 'memory', 'keep-going', 'team']) expect(await ui.find({ type: 'Button', key })).toBeDefined()
+  const boxes = await ui.findAll({ type: 'Box' })
+  expect(boxes.filter(b => b.key?.startsWith('ask')).length).toBe(2)
+  expect(boxes.filter(b => b.key?.startsWith('context-legend')).length).toBe(2)
+  await ui.unmount()
+})
+
+test('while the panel waits for room, the card offers a Side panel button that docks it', async ($, on) => {
+  const clock = world(on)
+  const { opened } = panes(on, { isPlaced: false })
+  await started($, clock)
+  const band = await mountFullscreenBand($)
+  await clock.settle()
+  expect(opened.length).toBe(1)
+  await band.press({ key: 'dock' })
+  await clock.settle()
+  expect(opened.length).toBe(2)
+  expect(toasts.some(t => /needs a wider window/.test(t))).toBe(true)
+  await band.unmount()
+
+  // the main screen docks nothing, so it offers nothing
+  const plain = await mountBand($)
+  expect(await plain.find({ type: 'Button', key: 'dock' })).toBeUndefined()
+  await plain.unmount()
+})
