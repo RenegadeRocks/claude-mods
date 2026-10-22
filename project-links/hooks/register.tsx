@@ -15,9 +15,19 @@ const loadedAt = atom({ plugin: 'project-links', key: 'loadedAt' } as const, '')
 const error = atom({ plugin: 'project-links', key: 'error' } as const, '')
 const raw = atom({ plugin: 'project-links', key: 'raw' } as const, '')
 
+// The file is read relative to the working directory; when a command has moved the shell into a
+// sub-folder, walk up to four levels to find the project's own links file.
+async function readLinks($: any): Promise<string> {
+  let lastErr: any = null
+  for (const prefix of ['', '../', '../../', '../../../', '../../../../']) {
+    try { return await $.fs.read(prefix + FILE) } catch (e) { lastErr = e }
+  }
+  throw lastErr
+}
+
 async function load($: any) {
   try {
-    const text: string = await $.fs.read(FILE)
+    const text: string = await readLinks($)
     const before = await read($, raw)
     if (text === before) return
     const parsed = JSON.parse(text) as { groups?: LinkGroup[] }
